@@ -24,7 +24,7 @@ data "aws_ami" "ubuntu" {
 
 resource "aws_security_group" "culturelive" {
   name        = "culturelive-ec2"
-  description = "CultureLive — SSH, HTTP, HTTPS"
+  description = "CultureLive SSH HTTP HTTPS"
 
   ingress {
     description = "SSH"
