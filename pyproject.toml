@@ -24,6 +24,7 @@ dependencies = [
   "plotly>=5.24.0",
   "PyJWT>=2.10.0",
   "bcrypt>=4.2.0",
+  "requests>=2.32.0",
 ]
 
 [project.optional-dependencies]
@@ -36,6 +37,8 @@ dev = [
 
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
+asyncio_default_fixture_loop_scope = "session"
+asyncio_default_test_loop_scope = "session"
 testpaths = ["tests"]
 markers = [
   "google_live: tests nécessitant OAuth Google réel",
@@ -43,9 +46,23 @@ markers = [
 ]
 
 [tool.setuptools.packages.find]
-where = ["backend", "integration", "dashboard"]
-include = ["cultur_live*"]
+where = ["."]
+include = ["backend*", "integration*"]
 
 [build-system]
 requires = ["setuptools>=75.0"]
 build-backend = "setuptools.build_meta"
+
+[tool.ruff]
+line-length = 120
+target-version = "py311"
+extend-exclude = ["backend/migrations/versions"]
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "B"]
+
+[tool.ruff.lint.flake8-bugbear]
+extend-immutable-calls = ["fastapi.Depends", "fastapi.Query", "fastapi.Header"]
+
+[tool.ruff.lint.per-file-ignores]
+"infrastructure/scripts/*.py" = ["E402"]

@@ -1,24 +1,24 @@
 """Auth dashboard — scope org admin vs sales user."""
 
 import uuid
+from datetime import datetime, timezone
 
 import pytest
 from httpx import ASGITransport, AsyncClient
+from sqlalchemy import delete
 
-from backend.config import get_settings
 from backend.db.models import AppUser, DashboardAccount, MeetingClassification, Organization
-from backend.db.session import get_session_factory, init_db
+from backend.db.session import get_session_factory
 from backend.main import app
 from backend.services.auth import DashboardRole, hash_password
 
-pytestmark = pytest.mark.db_live
+pytestmark = [pytest.mark.db_live, pytest.mark.usefixtures("migrated_db")]
 
 
-@pytest.fixture
-async def auth_fixture():
-    await init_db()
+async def test_dashboard_auth_scopes():
     factory = get_session_factory()
     suffix = uuid.uuid4().hex[:6]
+
     async with factory() as session:
         org = Organization(public_ref=f"org_auth_{suffix}", display_name="Auth Test Co")
         session.add(org)
@@ -27,24 +27,24 @@ async def auth_fixture():
         u2 = AppUser(organization_id=org.id, public_ref=f"usr_b_{suffix}")
         session.add_all([u1, u2])
         await session.flush()
-        session.add(
-            DashboardAccount(
-                login=f"admin_{suffix}",
-                password_hash=hash_password("AdminPass!1"),
-                role=DashboardRole.ORG_ADMIN.value,
-                organization_id=org.id,
-            )
+        session.add_all(
+            [
+                DashboardAccount(
+                    login=f"admin_{suffix}",
+                    password_hash=hash_password("AdminPass!1"),
+                    role=DashboardRole.ORG_ADMIN.value,
+                    organization_id=org.id,
+                ),
+                DashboardAccount(
+                    login=f"sales_{suffix}",
+                    password_hash=hash_password("SalesPass!1"),
+                    role=DashboardRole.SALES_USER.value,
+                    organization_id=org.id,
+                    user_id=u1.id,
+                ),
+            ]
         )
-        session.add(
-            DashboardAccount(
-                login=f"sales_{suffix}",
-                password_hash=hash_password("SalesPass!1"),
-                role=DashboardRole.SALES_USER.value,
-                organization_id=org.id,
-                user_id=u1.id,
-            )
-        )
-        now = __import__("datetime").datetime.now(__import__("datetime").timezone.utc)
+        now = datetime.now(timezone.utc)
         for user, title in [(u1, "Discovery Acme"), (u2, "Cold call list")]:
             session.add(
                 MeetingClassification(
@@ -60,43 +60,38 @@ async def auth_fixture():
                 )
             )
         await session.commit()
-        yield {
-            "suffix": suffix,
-            "org_ref": org.public_ref,
-            "u1_ref": u1.public_ref,
-            "u2_ref": u2.public_ref,
-        }
+        org_id, u1_ref, u2_ref = org.id, u1.public_ref, u2.public_ref
 
+    try:
+        transport = ASGITransport(app=app)
+        async with AsyncClient(transport=transport, base_url="http://test") as client:
+            admin_login = await client.post(
+                "/auth/dashboard/login", json={"login": f"admin_{suffix}", "password": "AdminPass!1"}
+            )
+            assert admin_login.status_code == 200
+            admin_token = admin_login.json()["access_token"]
+            admin_overview = await client.get("/stats/overview", headers={"Authorization": f"Bearer {admin_token}"})
+            users = {u["user_ref"] for u in admin_overview.json()["by_user"]}
+            assert users == {u1_ref, u2_ref}
 
-@pytest.fixture
-def jwt_settings(monkeypatch):
-    monkeypatch.setenv("JWT_SECRET", "test-jwt-secret-for-pytest-only")
-    get_settings.cache_clear()
+            sales_login = await client.post(
+                "/auth/dashboard/login", json={"login": f"sales_{suffix}", "password": "SalesPass!1"}
+            )
+            sales_token = sales_login.json()["access_token"]
+            sales_overview = await client.get("/stats/overview", headers={"Authorization": f"Bearer {sales_token}"})
+            sales_users = sales_overview.json()["by_user"]
+            assert [u["user_ref"] for u in sales_users] == [u1_ref]
 
+            forbidden = await client.get(
+                "/stats/meetings",
+                params={"user_ref": u2_ref},
+                headers={"Authorization": f"Bearer {sales_token}"},
+            )
+            assert forbidden.status_code == 403
 
-@pytest.mark.asyncio
-async def test_org_admin_sees_all_users(auth_fixture, jwt_settings):
-    sfx = auth_fixture["suffix"]
-    transport = ASGITransport(app=app)
-    async with AsyncClient(transport=transport, base_url="http://test") as client:
-        login = await client.post("/auth/dashboard/login", json={"login": f"admin_{sfx}", "password": "AdminPass!1"})
-        assert login.status_code == 200
-        token = login.json()["access_token"]
-        overview = await client.get("/stats/overview", headers={"Authorization": f"Bearer {token}"})
-        assert overview.status_code == 200
-        users = {u["user_ref"] for u in overview.json()["by_user"]}
-        assert auth_fixture["u1_ref"] in users
-        assert auth_fixture["u2_ref"] in users
-
-
-@pytest.mark.asyncio
-async def test_sales_user_sees_only_self(auth_fixture, jwt_settings):
-    sfx = auth_fixture["suffix"]
-    transport = ASGITransport(app=app)
-    async with AsyncClient(transport=transport, base_url="http://test") as client:
-        login = await client.post("/auth/dashboard/login", json={"login": f"sales_{sfx}", "password": "SalesPass!1"})
-        token = login.json()["access_token"]
-        overview = await client.get("/stats/overview", headers={"Authorization": f"Bearer {token}"})
-        users = overview.json()["by_user"]
-        assert len(users) == 1
-        assert users[0]["user_ref"] == auth_fixture["u1_ref"]
+            bad = await client.post("/auth/dashboard/login", json={"login": f"admin_{suffix}", "password": "nope"})
+            assert bad.status_code == 401
+    finally:
+        async with factory() as session:
+            await session.execute(delete(Organization).where(Organization.id == org_id))
+            await session.commit()

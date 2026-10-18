@@ -1,33 +1,24 @@
 #!/usr/bin/env bash
-# Déploiement one-go : nginx HTTP → certificat → nginx HTTPS → seed demo optionnel.
+# Déploiement one-go : build, démarrage HTTP, certificat Let's Encrypt, bascule HTTPS.
+# RUN_SEED=true  -> charge aussi les données de démonstration (comptes aux mots de passe connus).
+# SKIP_TLS=true  -> reste en HTTP (test local sans DNS).
 set -euo pipefail
+# shellcheck source=_common.sh
+source "$(dirname "${BASH_SOURCE[0]}")/_common.sh"
 
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-INFRA_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
-cd "$INFRA_DIR"
+RUN_SEED="${RUN_SEED:-false}"
+SKIP_TLS="${SKIP_TLS:-false}"
 
-RUN_SEED="${RUN_SEED:-true}"
+bash "$SCRIPT_DIR/render-nginx-http-only.sh"
+$DC build
+$DC up -d --wait postgres api worker dashboard nginx certbot
 
-if [[ -f ../.env ]]; then
-  set -a
-  # shellcheck disable=SC1091
-  source ../.env
-  set +a
+if [[ "$SKIP_TLS" != "true" ]]; then
+  bash "$SCRIPT_DIR/init-letsencrypt.sh"
 fi
 
-: "${DOMAIN_NAME:?DOMAIN_NAME requis dans .env}"
-: "${LETSENCRYPT_EMAIL:?LETSENCRYPT_EMAIL requis}"
-
-bash scripts/render-nginx-http-only.sh
-docker compose build
-docker compose up -d postgres api dashboard nginx certbot
-
-echo "Attente des services..."
-sleep 8
-bash scripts/init-letsencrypt.sh
-
 if [[ "$RUN_SEED" == "true" ]]; then
-  docker compose --profile seed run --rm seed
+  $DC --profile seed run --rm seed
 fi
 
 echo "Déploiement terminé."

@@ -4,7 +4,7 @@ WORKDIR /app
 
 RUN apt-get update && apt-get install -y --no-install-recommends curl && rm -rf /var/lib/apt/lists/*
 
-COPY pyproject.toml README.md ./
+COPY pyproject.toml README.md alembic.ini ./
 COPY backend ./backend
 COPY integration ./integration
 COPY referential ./referential
@@ -14,4 +14,8 @@ RUN pip install --no-cache-dir -U pip && pip install --no-cache-dir .
 ENV PYTHONPATH=/app
 EXPOSE 8000
 
-CMD ["uvicorn", "backend.main:app", "--host", "0.0.0.0", "--port", "8000"]
+HEALTHCHECK --interval=10s --timeout=5s --start-period=20s --retries=6 \
+  CMD curl -fsS http://127.0.0.1:8000/health || exit 1
+
+# Les migrations sont appliquées avant le démarrage de l'API.
+CMD ["sh", "-c", "python -m backend.db.migrate && exec uvicorn backend.main:app --host 0.0.0.0 --port 8000"]

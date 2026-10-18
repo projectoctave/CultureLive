@@ -16,18 +16,17 @@ if str(ROOT) not in sys.path:
 
 from sqlalchemy import delete, select
 
-from backend.config import Settings
+from backend.db.migrate import upgrade_head
 from backend.db.models import (
     AppUser,
     DashboardAccount,
     MeetingClassification,
     Organization,
-    SalesReferential,
 )
-from backend.db.session import get_session_factory, init_db
+from backend.db.session import dispose_engine, get_session_factory
 from backend.services.auth import DashboardRole, hash_password
 from backend.services.classifier import MeetingInput, classify_heuristic
-from backend.services.referential import ensure_active_referential, load_default_referential
+from backend.services.referential import ensure_active_referential
 from tests.fixtures.sales_agenda import SALES_AGENDA
 
 DEMO_ORGS = [
@@ -84,10 +83,8 @@ async def clear_demo(session) -> None:
 
 
 async def seed() -> None:
-    settings = Settings()
-    await init_db()
+    await asyncio.to_thread(upgrade_head)
     factory = get_session_factory()
-    referential_payload = load_default_referential()
 
     async with factory() as session:
         await clear_demo(session)
@@ -159,7 +156,6 @@ async def seed() -> None:
         await session.commit()
 
     print("\n=== CultureLive — données demo chargées ===\n")
-    print(f"DATABASE_URL={settings.database_url}\n")
     print("Comptes dashboard (login / mot de passe / rôle) :\n")
     for role, login, password in credentials:
         print(f"  [{role:10}] {login:16} / {password}")
@@ -167,5 +163,12 @@ async def seed() -> None:
     print("Puis dashboard Streamlit avec ces identifiants.\n")
 
 
+async def main() -> None:
+    try:
+        await seed()
+    finally:
+        await dispose_engine()
+
+
 if __name__ == "__main__":
-    asyncio.run(seed())
+    asyncio.run(main())

@@ -4,7 +4,7 @@ import re
 from pydantic import BaseModel
 
 from backend.config import Settings
-from backend.services.referential import SalesReferentialPayload, SalesCategory
+from backend.services.referential import SalesCategory, SalesReferentialPayload
 
 KEYWORD_RULES: dict[str, list[re.Pattern[str]]] = {
     "cold_call": [

@@ -1,5 +1,12 @@
 name: culturelive
 
+x-app-env: &app-env
+  DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER:-cultur_live}:${POSTGRES_PASSWORD:-cultur_live}@postgres:5432/${POSTGRES_DB:-cultur_live}
+  PUBLIC_BASE_URL: https://${DOMAIN_NAME:-localhost}
+  GOOGLE_REDIRECT_URI: https://${DOMAIN_NAME:-localhost}/api/auth/google/callback
+  JWT_SECRET: ${JWT_SECRET:?JWT_SECRET requis (32 caractères minimum)}
+  DASHBOARD_API_KEY: ${DASHBOARD_API_KEY:?DASHBOARD_API_KEY requise (12 caractères minimum)}
+
 services:
   postgres:
     image: postgres:16-alpine
@@ -11,7 +18,7 @@ services:
     volumes:
       - pgdata:/var/lib/postgresql/data
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-cultur_live}"]
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-cultur_live} -d ${POSTGRES_DB:-cultur_live}"]
       interval: 5s
       timeout: 5s
       retries: 10
@@ -26,11 +33,31 @@ services:
     env_file:
       - ${ENV_FILE:-../.env}
     environment:
-      DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER:-cultur_live}:${POSTGRES_PASSWORD:-cultur_live}@postgres:5432/${POSTGRES_DB:-cultur_live}
-      PUBLIC_BASE_URL: https://${DOMAIN_NAME}
-      GOOGLE_REDIRECT_URI: https://${DOMAIN_NAME}/api/auth/google/callback
+      <<: *app-env
     depends_on:
       postgres:
+        condition: service_healthy
+    networks:
+      - culturelive
+
+  worker:
+    build:
+      context: ..
+      dockerfile: infrastructure/docker/Dockerfile.api
+    restart: unless-stopped
+    command: ["python", "-m", "backend.worker"]
+    healthcheck:
+      test: ["CMD", "python", "-m", "backend.worker", "--healthcheck"]
+      interval: 30s
+      timeout: 10s
+      start_period: 20s
+      retries: 3
+    env_file:
+      - ${ENV_FILE:-../.env}
+    environment:
+      <<: *app-env
+    depends_on:
+      api:
         condition: service_healthy
     networks:
       - culturelive
@@ -43,7 +70,8 @@ services:
     environment:
       BACKEND_URL: http://api:8000
     depends_on:
-      - api
+      api:
+        condition: service_healthy
     networks:
       - culturelive
 
@@ -54,9 +82,11 @@ services:
       - "80:80"
       - "443:443"
     volumes:
-      - ./nginx/default.conf:/etc/nginx/conf.d/default.conf:ro
+      - ./nginx/conf.d:/etc/nginx/conf.d:ro
       - certbot-www:/var/www/certbot:ro
       - certbot-certs:/etc/letsencrypt:ro
+    # Recharge périodiquement nginx pour prendre en compte les certificats renouvelés.
+    command: ["/bin/sh", "-c", "(while :; do sleep 6h; nginx -s reload; done) & exec nginx -g 'daemon off;'"]
     depends_on:
       - api
       - dashboard
@@ -65,6 +95,7 @@ services:
 
   certbot:
     image: certbot/certbot:v2.11.0
+    restart: unless-stopped
     volumes:
       - certbot-www:/var/www/certbot
       - certbot-certs:/etc/letsencrypt
@@ -80,9 +111,9 @@ services:
     env_file:
       - ${ENV_FILE:-../.env}
     environment:
-      DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER:-cultur_live}:${POSTGRES_PASSWORD:-cultur_live}@postgres:5432/${POSTGRES_DB:-cultur_live}
+      <<: *app-env
     depends_on:
-      postgres:
+      api:
         condition: service_healthy
     networks:
       - culturelive

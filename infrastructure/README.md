@@ -1,72 +1,104 @@
 # Infrastructure CultureLive
 
-Stack **dockerisée** pour une instance **AWS EC2** : **PostgreSQL**, **API**, **dashboard Streamlit**, **nginx**, **Let's Encrypt**.
+Stack **dockerisée** pour une instance **AWS EC2** : **PostgreSQL**, **API**, **worker de synchronisation**, **dashboard Streamlit**, **nginx**, **Let's Encrypt (certbot)**.
 
 ## Arborescence
 
 | Chemin | Rôle |
 |--------|------|
 | `docker-compose.yml` | Orchestration des services |
-| `docker/` | Dockerfiles API, dashboard, seed |
-| `nginx/` | Config nginx (template HTTPS + script HTTP bootstrap) |
-| `scripts/seed_demo_data.py` | Données fake 3×3 entreprises / sales |
+| `docker/` | Dockerfiles API/worker, dashboard, seed |
+| `nginx/` | Templates nginx : HTTP (bootstrap ACME) et HTTPS (redirection 80 -> 443) |
 | `scripts/deploy-stack.sh` | Déploiement one-go |
-| `scripts/init-letsencrypt.sh` | Certificat + activation HTTPS |
-| `terraform/` | EC2 + EIP + security group |
+| `scripts/init-letsencrypt.sh` | Obtention du certificat + bascule HTTPS |
+| `scripts/seed_demo_data.py` | Données fake : 3 entreprises x 3 sales |
+| `terraform/` | EC2 (Ubuntu 24.04) + IP élastique + security group |
 
-## Variables `.env` (racine projet)
+## Services
 
-En plus des variables existantes :
+| Service | Rôle |
+|---------|------|
+| `postgres` | PostgreSQL 16, volume `pgdata` |
+| `api` | FastAPI ; applique les migrations Alembic au démarrage ; healthcheck `/health` (teste aussi la base) |
+| `worker` | Synchronise toutes les `SYNC_INTERVAL_MINUTES` les agendas Google connectés (incrémental) ; healthcheck par heartbeat |
+| `dashboard` | Streamlit (login entreprise / sales) |
+| `nginx` | Reverse proxy `/` -> dashboard, `/api/` -> API ; recharge les certificats toutes les 6 h |
+| `certbot` | Renouvellement automatique du certificat |
+
+## Fichier `.env` (racine du projet)
+
+Copier `.env.example` vers `.env` et renseigner au minimum :
 
 ```env
 DOMAIN_NAME=culturelive.example.com
 LETSENCRYPT_EMAIL=admin@example.com
-POSTGRES_USER=cultur_live
 POSTGRES_PASSWORD=<secret>
-JWT_SECRET=<secret-long>
-TOKEN_ENCRYPTION_KEY=<secret>
+JWT_SECRET=<32+ caractères>          # openssl rand -hex 32
+DASHBOARD_API_KEY=<12+ caractères>   # openssl rand -hex 24
+TOKEN_ENCRYPTION_KEY=<16+ caractères>
 ```
 
-## Déploiement local / EC2 (Docker)
+`JWT_SECRET` et `DASHBOARD_API_KEY` sont **obligatoires** : le compose et l'API refusent de démarrer sans eux.
+
+## Déploiement
 
 ```bash
 cd infrastructure
-cp ../.env.example ../.env   # compléter DOMAIN_NAME, JWT_SECRET, etc.
-export DOMAIN_NAME=... LETSENCRYPT_EMAIL=...
 bash scripts/deploy-stack.sh
 ```
 
-Étapes exécutées :
+Étapes : rendu nginx HTTP, build, démarrage de la stack (`up --wait`), certificat Let's Encrypt, bascule nginx en HTTPS.
 
-1. Build images API + dashboard + seed  
-2. PostgreSQL + services  
-3. nginx HTTP (challenge ACME)  
-4. Certificat Let's Encrypt  
-5. nginx HTTPS (template `nginx/default.conf.template`)  
-6. Seed demo (`RUN_SEED=false` pour désactiver)
+Options (variables d'environnement) :
 
-## Seed manuel
+| Variable | Effet |
+|----------|-------|
+| `RUN_SEED=true` | Charge aussi les données de démonstration. **Désactivé par défaut** : les comptes de démo ont des mots de passe publics. |
+| `SKIP_TLS=true` | Reste en HTTP (essai local sans DNS) |
+| `LETSENCRYPT_STAGING=true` | Certificat de test (sans limites de débit) |
+| `ENV_FILE=/chemin/.env` | Utilise un autre fichier d'environnement |
+
+Prérequis pour le certificat : l'enregistrement DNS A de `DOMAIN_NAME` pointe vers le serveur, les ports 80 et 443 sont ouverts.
+
+> Utiliser les scripts plutôt que `docker compose up` directement : ils chargent le `.env` et génèrent la config nginx
+> (`nginx/conf.d/default.conf`, non versionnée). En direct : `docker compose --env-file ../.env ...`.
+
+## Données de démonstration
 
 ```bash
 cd infrastructure
-docker compose --profile seed run --rm seed
+docker compose --env-file ../.env --profile seed run --rm seed
 ```
 
-Comptes créés (exemple) — voir sortie console du script :
-
-- **Org admin** : `nova_admin` / `NovaAdmin!2026` (vue toute l'équipe Nova)  
-- **Sales** : `nova.alice` / `NovaAlice!2026` (vue individuelle)
+Le script affiche les comptes (login / mot de passe) : par exemple `nova_admin` voit toute l'équipe Nova, `nova.alice` ne voit que sa propre activité.
 
 ## Terraform (EC2)
 
 ```bash
 cd infrastructure/terraform
-cp terraform.tfvars.example terraform.tfvars
+cp terraform.tfvars.example terraform.tfvars   # key_name, domain_name, letsencrypt_email, repo_clone_url
 terraform init
 terraform apply
 ```
 
-Configurer le **DNS A** vers `public_ip`, copier le repo et le `.env` sur l'instance, puis lancer `deploy-stack.sh`.
+1. Créer l'enregistrement DNS A vers `public_ip`.
+2. Se connecter en SSH (`ssh_hint` en sortie) : le dépôt est cloné dans `/opt/culturelive/CultureLive`.
+3. Créer le `.env`, puis lancer `scripts/deploy-stack.sh`.
+
+## Ce qui est vérifié, et ce qui ne l'est pas
+
+Vérifié (exécuté, avec Docker, dans l'environnement de développement) :
+
+- build des images, migrations au démarrage, `up --wait`, healthchecks (API, worker, postgres) ;
+- parcours complet via nginx : `/api/health`, 401 sans clé, login org admin / sales, stats scopées, dashboard et websocket Streamlit ;
+- nginx en HTTPS avec un certificat auto-signé : 443, redirection 301 depuis le 80, challenge ACME servi sur le 80, HSTS ;
+- `terraform fmt`, `validate`, rendu du `user-data` ; `shellcheck` ; `docker compose config`.
+
+Non vérifié :
+
+- **l'émission réelle d'un certificat Let's Encrypt** (exige un vrai domaine) : la commande certbot est exécutée jusqu'au serveur de staging, qui n'a refusé que l'email factice utilisé pour le test ;
+- `terraform apply` sur un vrai compte AWS ;
+- le flux Google avec un vrai compte (voir `tests/test_google_flow_mocked.py` pour la couverture avec Google simulé).
 
 ## URLs
 

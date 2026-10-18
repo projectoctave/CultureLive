@@ -9,3 +9,5 @@ dist/
 .tokens/
 htmlcov/
 .coverage
+
+infrastructure/nginx/conf.d/

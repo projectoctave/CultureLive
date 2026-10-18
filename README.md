@@ -1,11 +1,11 @@
-# CultureLive — Note de cadrage & spécification (v0.1)
+# CultureLive — Note de cadrage & spécification (v0.2)
 
 **Projet** : CultureLive  
 **Écosystème** : Projet Octave (GitHub)  
 **Statut document** : Spécification de référence — première brique livrée  
-**Version applicative** : 0.1.0  
-**Stack** : Python 3.12+, FastAPI, PostgreSQL, Google Calendar API, Streamlit  
-**Hébergement cible** : AWS (instance EC2 Python, PostgreSQL managé recommandé en production)
+**Version applicative** : 0.2.0  
+**Stack** : Python 3.12+, FastAPI, PostgreSQL, Alembic, Google Calendar API, Streamlit, Docker, Terraform  
+**Hébergement cible** : AWS (une instance EC2 exécutant la stack Docker ; PostgreSQL managé possible en production)
 
 ---
 
@@ -19,19 +19,19 @@ CultureLive est un **microservice** qui connecte l’agenda **Google Calendar** 
 - Permettre un référentiel de typologie **custom** (évolution métier, verticals, langues).
 - Préparer des agrégats anonymisés pour pilotage et tableaux de bord.
 
-### 1.2 Périmètre v0.1 (inclus)
+### 1.2 Périmètre (inclus)
 
 | Brique | Description |
 |--------|-------------|
 | **B1 — Calendar** | OAuth Google, création et lecture d’événements sur une fenêtre temporelle |
 | **B2 — Classification** | Classification des meetings récupérés + stockage PostgreSQL |
-| **B3 — Dashboard** | Visualisation des stats et listes filtrées (clé API) |
-| **B4 — Qualité** | Tests fonctionnels classification, pipeline DB, intégration Google (live) |
-| **B5 — Déploiement** | Artefacts bootstrap EC2 (systemd, nginx) |
+| **B3 — Dashboard** | Login par entreprise / par sales ; l’admin d’une entreprise voit toute son équipe, un sales ne voit que lui |
+| **B4 — Qualité** | Tests fonctionnels (classification, DB, flux Google simulé, migrations, auth) + CI GitHub Actions ; tests Google live prêts mais non exécutés |
+| **B5 — Déploiement** | `infrastructure/` : Docker (PostgreSQL, API, worker, dashboard, nginx, certbot), Terraform EC2, Let’s Encrypt |
 
-### 1.3 Hors périmètre v0.1 (explicite)
+### 1.3 Hors périmètre (explicite)
 
-- Synchronisation temps réel (webhooks Google) — prévu ultérieurement.
+- Synchronisation temps réel (webhooks Google) — la synchronisation est périodique (worker).
 - Multi-calendriers avancés, salles, ressources.
 - SSO entreprise (SAML/OIDC) — OAuth Google utilisateur uniquement.
 - Interface d’administration complète (CRUD utilisateurs UI).
@@ -54,7 +54,7 @@ CultureLive est un **microservice** qui connecte l’agenda **Google Calendar** 
 │  ┌──────────────┐  ┌─────────────┐  ┌───────────────┐ │
 │  │  backend/    │  │ integration/│  │  dashboard/   │ │
 │  │  FastAPI     │──│ Google OAuth│  │  Streamlit    │ │
-│  │  classifier  │  │ + Calendar  │  │  (stats API)  │ │
+│  │  + worker    │  │ + Calendar  │  │  (stats API)  │ │
 │  └──────┬───────┘  └─────────────┘  └───────▲───────┘ │
 │         │                                    │         │
 │         └──────────────┬─────────────────────┘         │
@@ -72,10 +72,11 @@ CultureLive est un **microservice** qui connecte l’agenda **Google Calendar** 
 |---------|------|
 | `backend/` | API REST, règles métier, classifier, modèle de données, endpoints stats |
 | `integration/` | Couche d’intégration Google (OAuth, client Calendar) |
-| `dashboard/` | Application Streamlit consommant l’API stats (authentification par clé) |
-| `tests/` | Batteries fonctionnelles (classification, DB, Google live) |
+| `dashboard/` | Application Streamlit consommant l’API stats (login entreprise / sales) |
+| `tests/` | Tests fonctionnels (classification, DB, auth, flux Google simulé, migrations) et tests Google live |
 | `referential/` | Référentiel typologie sales par défaut (JSON) |
-| `deploy/` | Scripts et unités systemd / nginx pour **AWS EC2** |
+| `backend/migrations/` | Migrations Alembic (schéma de la base) |
+| `infrastructure/` | Docker Compose, nginx, Let’s Encrypt, seed de démo, Terraform (**AWS EC2**) |
 
 ---
 
@@ -96,8 +97,8 @@ CultureLive est un **microservice** qui connecte l’agenda **Google Calendar** 
 
 | ID | Exigence | Critère d’acceptation |
 |----|----------|------------------------|
-| MTG-01 | Créer une réunion | `POST /meetings?user_id=` crée un événement dans le calendrier `primary` |
-| MTG-02 | Lister sur période | `GET /meetings?user_id=&time_min=&time_max=` retourne les événements ordonnés |
+| MTG-01 | Créer une réunion | `POST /meetings?user_id=` (clé admin) crée un événement dans le calendrier `primary` |
+| MTG-02 | Lister sur période | `GET /meetings?user_id=&time_min=&time_max=` (clé admin) retourne les événements ordonnés, toutes pages Google parcourues |
 | MTG-03 | Champs minimum | `summary`, `description`, `start`, `end`, identifiant Google `id` |
 
 Corps création (`POST /meetings`) :
@@ -111,8 +112,8 @@ Corps création (`POST /meetings`) :
 | ID | Exigence | Critère d’acceptation |
 |----|----------|------------------------|
 | REF-01 | Référentiel par défaut | Fichier `referential/sales-typology.json` chargé si aucun actif en base |
-| REF-02 | Lecture | `GET /referential` retourne le référentiel actif |
-| REF-03 | Mise à jour | `PUT /referential` remplace le référentiel actif (versionning simple en base) |
+| REF-02 | Lecture | `GET /referential` (clé admin) retourne le référentiel actif |
+| REF-03 | Mise à jour | `PUT /referential` (clé admin) remplace le référentiel actif ; les réunions déjà classées sont reclassées à la prochaine synchronisation |
 
 **Catégories par défaut** : `cold_call`, `discovery_call`, `demo`, `negotiation`, `follow_up`, `customer_success`, `internal`, `other`.
 
@@ -122,19 +123,23 @@ Chaque catégorie comporte : `id`, `label`, `description` (utilisée par le clas
 
 | ID | Exigence | Critère d’acceptation |
 |----|----------|------------------------|
-| CLS-01 | Sync classify | `POST /classify/sync` lit Calendar sur `[time_min, time_max]` et classifie |
+| CLS-01 | Sync classify | `POST /classify/sync` (clé admin) lit Calendar sur `[time_min, time_max]` et classifie |
 | CLS-02 | Moteur | Heuristiques mots-clés ; si `OPENAI_API_KEY` présent, LLM avec repli heuristique |
 | CLS-03 | Idempotence | Upsert par couple (`google_event_id`, `user_id`) |
+| CLS-05 | Synchronisation incrémentale | Un événement inchangé (titre, description, référentiel) n’est pas reclassifié ; `force=true` reclassifie tout |
+| CLS-06 | Isolation des erreurs | L’échec d’un utilisateur (token révoqué…) n’empêche pas la synchronisation des autres ; il est remonté dans `errors` |
+| CLS-07 | Synchronisation périodique | Le worker synchronise tous les utilisateurs connectés toutes les `SYNC_INTERVAL_MINUTES` |
 | CLS-04 | Traçabilité | Stocker `category_id`, `category_label`, `confidence`, `rationale`, horodatage |
 
 ### 3.5 Dashboard et statistiques (B3)
 
 | ID | Exigence | Critère d’acceptation |
 |----|----------|------------------------|
-| DSH-01 | Authentification | Endpoints stats protégés par en-tête `X-API-Key` = `DASHBOARD_API_KEY` |
+| DSH-01 | Authentification | `POST /auth/dashboard/login` (login / mot de passe, bcrypt) renvoie un JWT ; les endpoints stats acceptent ce jeton, ou la clé admin `X-API-Key` (accès global) |
+| DSH-05 | Rôles | `org_admin` : voit tous les sales de son entreprise ; `sales_user` : voit uniquement sa propre activité (403 sur les données d’autrui) |
 | DSH-02 | Agrégats | `GET /stats/overview` : volumes par `organization_ref`, `user_ref`, catégorie |
 | DSH-03 | Liste filtrée | `GET /stats/meetings?organization_ref=&user_ref=` sans email ni nom réel |
-| DSH-04 | UI | Streamlit : graphiques barres / camembert + tableau filtrable |
+| DSH-04 | UI | Streamlit : écran de connexion, graphiques barres / camembert, tableau filtrable selon le rôle |
 
 **Règle d’anonymisation** :
 
@@ -151,10 +156,13 @@ Chaque catégorie comporte : `id`, `label`, `description` (utilisée par le clas
 | `organizations` | Tenant ; `public_ref` anonymisé |
 | `app_users` | Utilisateur applicatif rattaché à une org ; `public_ref` anonymisé |
 | `oauth_connections` | Refresh token Google **chiffré** (`TOKEN_ENCRYPTION_KEY`) |
+| `dashboard_accounts` | Comptes de connexion au dashboard (rôle `org_admin` ou `sales_user`, mot de passe haché) |
 | `sales_referentials` | Référentiels JSON versionnés ; un actif à la fois |
 | `meeting_classifications` | Résultat de classification par événement et utilisateur |
 
 Contrainte d’unicité : `(google_event_id, user_id)` sur `meeting_classifications`.
+
+Le schéma est géré par **Alembic** (`backend/migrations/`) ; les migrations sont appliquées au démarrage du conteneur API (`python -m backend.db.migrate`). Un test vérifie que les modèles et les migrations restent alignés et que les migrations sont réversibles.
 
 ---
 
@@ -162,16 +170,19 @@ Contrainte d’unicité : `(google_event_id, user_id)` sur `meeting_classificati
 
 | Méthode | Route | Auth | Description |
 |---------|-------|------|-------------|
-| GET | `/health` | — | Sonde disponibilité |
+| GET | `/health` | — | Sonde de disponibilité (teste aussi la base) |
 | GET | `/auth/google` | — | URL OAuth |
-| GET | `/auth/google/callback` | — | Finalisation OAuth |
-| POST | `/meetings` | `user_id` query | Création événement |
-| GET | `/meetings` | `user_id` query | Liste sur période |
-| GET | `/referential` | — | Référentiel actif |
-| PUT | `/referential` | — | Nouveau référentiel actif |
-| POST | `/classify/sync` | — | Lecture Calendar + classify + DB |
-| GET | `/stats/overview` | `X-API-Key` | Agrégats anonymisés |
-| GET | `/stats/meetings` | `X-API-Key` | Liste meetings classifiés |
+| GET | `/auth/google/callback` | — | Finalisation OAuth (`state` à usage unique, expire en 10 min) |
+| POST | `/auth/dashboard/login` | — | Login dashboard, renvoie un JWT |
+| POST | `/meetings` | clé admin | Création événement |
+| GET | `/meetings` | clé admin | Liste sur période |
+| GET | `/referential` | clé admin | Référentiel actif |
+| PUT | `/referential` | clé admin | Nouveau référentiel actif |
+| POST | `/classify/sync` | clé admin | Lecture Calendar + classification + DB (incrémental) |
+| GET | `/stats/overview` | JWT ou clé admin | Agrégats anonymisés, limités au périmètre du rôle |
+| GET | `/stats/meetings` | JWT ou clé admin | Liste des meetings classifiés, limitée au périmètre du rôle |
+
+La **clé admin** est l’en-tête `X-API-Key` (valeur `DASHBOARD_API_KEY`).
 
 Variables d’environnement : voir `.env.example`.
 
@@ -183,23 +194,26 @@ Variables d’environnement : voir `.env.example`.
 
 - Secrets uniquement via variables d’environnement (jamais commités).
 - Refresh tokens chiffrés en base (AES-GCM).
-- Dashboard et stats : clé API dédiée.
+- Routes d’administration protégées par la clé admin ; dashboard protégé par login (JWT, mots de passe hachés bcrypt).
+- Démarrage refusé si `JWT_SECRET` (32 caractères min.) ou `DASHBOARD_API_KEY` (12 caractères min.) sont absents.
+- Les comptes du seed de démonstration ont des mots de passe publics : ne pas les charger en production (`RUN_SEED=false`, valeur par défaut).
 - HTTPS obligatoire en production (nginx + certificat).
 
 ### 6.2 Infrastructure AWS (cible)
 
-- **Compute** : EC2 (type minimal recommandé `t3.small`), Amazon Linux 2023 ou Ubuntu 22.04.
-- **Base** : PostgreSQL (RDS recommandé) ; `DATABASE_URL` async (`postgresql+asyncpg://…`).
-- **Réseau** : SG restrictif ; egress vers Google APIs et OpenAI si IA activée.
-- **Secrets** : AWS Secrets Manager ou SSM Parameter Store.
-- **Process** : `systemd` pour API (port 8000) et dashboard (8501 derrière nginx).
+- **Compute** : une instance EC2 (type minimal recommandé `t3.small`, Ubuntu 24.04) exécutant la stack Docker, créée par Terraform (`infrastructure/terraform/`).
+- **Services** : PostgreSQL, API, worker de synchronisation, dashboard, nginx, certbot — voir `infrastructure/docker-compose.yml`.
+- **HTTPS** : Let’s Encrypt via certbot, renouvellement automatique, redirection 80 vers 443.
+- **Base** : PostgreSQL en conteneur avec volume persistant ; un PostgreSQL managé (RDS) reste possible en changeant `DATABASE_URL`.
+- **Réseau** : security group ouvrant 22 (à restreindre), 80 et 443.
+- **Secrets** : fichier `.env` sur l’instance (jamais commité) ; AWS Secrets Manager ou SSM à envisager.
 
-Détails opérationnels : `deploy/aws-ec2/README.md`.
+Détails opérationnels et état de vérification : `infrastructure/README.md`.
 
 ### 6.3 Observabilité
 
-- Healthcheck : `/health`.
-- Logs applicatifs : journal systemd (`culturelive-api`, `culturelive-dashboard`).
+- Healthchecks Docker : API (`/health`, vérifie la base), worker (heartbeat), PostgreSQL.
+- Logs : `docker compose logs -f api worker`.
 
 ---
 
@@ -209,14 +223,19 @@ Détails opérationnels : `deploy/aws-ec2/README.md`.
 |-------|---------|----------|
 | Classification | `tests/test_classification_functional.py` | Agenda sales fictif (`tests/fixtures/sales_agenda.py`) — 8 typologies |
 | Pipeline DB | `tests/test_db_pipeline.py` | Classifier → insert PostgreSQL → cohérence agrégats |
-| Google live | `tests/test_google_integration.py` | Création meetings réels, lecture, `classify/sync`, stats (marqueur `google_live`) |
+| Auth dashboard | `tests/test_auth_dashboard.py` | Login, périmètre `org_admin` / `sales_user`, refus 403 / 401 |
+| Flux Google simulé | `tests/test_google_flow_mocked.py` | OAuth, création, lecture paginée, classification, sync incrémentale, isolation des erreurs, worker, clé admin, stats — avec un faux Google Calendar |
+| Migrations | `tests/test_migrations.py` | Schéma créé par Alembic, aligné avec les modèles, réversible |
+| Google live | `tests/test_google_integration.py` | Création de meetings réels, lecture, `classify/sync`, stats (marqueur `google_live`) — **non exécuté à ce jour** : aucun compte Google de test n’a pu être créé |
 
-**Prérequis Google live** : OAuth configuré, `CULTURELIVE_TEST_USER_ID` = UUID interne après callback.
+**Prérequis Google live** : OAuth configuré, API démarrée, `DASHBOARD_API_KEY` et `CULTURELIVE_TEST_USER_ID` (UUID interne renvoyé par le callback).
+
+La CI (`.github/workflows/ci.yml`) exécute le lint, les tests avec PostgreSQL, shellcheck, `terraform validate` et le build des images Docker.
 
 ```bash
 export PYTHONPATH=$PWD
 export DATABASE_URL=postgresql+asyncpg://cultur_live:cultur_live@localhost:5432/cultur_live
-pytest tests/test_classification_functional.py tests/test_db_pipeline.py -v
+pytest -m "not google_live" -v          # suite complète hors Google réel
 pytest tests/test_google_integration.py -v -m google_live
 ```
 
@@ -226,8 +245,8 @@ pytest tests/test_google_integration.py -v -m google_live
 
 1. **Onboarding** : l’utilisateur ouvre `authorization_url` → callback → récupération `user_id`.
 2. **Alimentation** : création manuelle ou réunions existantes dans Google Calendar.
-3. **Analyse** : appel `POST /classify/sync` sur la période d’intérêt.
-4. **Pilotage** : consultation dashboard (volumes par org / user / typologie).
+3. **Analyse** : le worker synchronise périodiquement (ou appel manuel de `POST /classify/sync`) ; seuls les événements nouveaux ou modifiés sont classifiés.
+4. **Pilotage** : connexion au dashboard ; l’admin d’une entreprise voit son équipe, un sales voit sa propre activité.
 
 ```mermaid
 sequenceDiagram
@@ -246,45 +265,45 @@ sequenceDiagram
     API->>G: events.list
     API->>API: classify (heuristique / IA)
     API->>DB: meeting_classifications
-    D->>API: GET /stats/* (X-API-Key)
+    D->>API: POST /auth/dashboard/login puis GET /stats/* (JWT)
     API->>DB: agrégats anonymisés
     API-->>D: JSON stats
 ```
 
 ---
 
-## 9. Roadmap indicative (post v0.1)
+## 9. Roadmap indicative
 
 | Version | Thème |
 |---------|--------|
-| v0.2 | Webhooks Google, sync incrémentale |
-| v0.3 | Référentiels multiples par organisation |
-| v0.4 | Export BI (CSV, API), métriques OTel |
-| v1.0 | Durcissement prod (RDS Multi-AZ, rotation secrets, audit) |
+| v0.3 | Webhooks Google (temps réel) |
+| v0.4 | Référentiels multiples par organisation |
+| v0.5 | Export BI (CSV, API), correction manuelle de la catégorie, métriques OTel |
+| v1.0 | Durcissement prod (sauvegardes automatiques, RDS Multi-AZ, rotation des secrets, audit) |
 
 ---
 
-## 10. Annexes — exploitation locale
+## 10. Annexes — exploitation
 
-### 10.1 Installation
+### 10.1 Développement local
 
 ```bash
 cd CultureLive
 python3 -m venv .venv && source .venv/bin/activate
 pip install -e ".[dev]"
-cp .env.example .env
-# Renseigner GOOGLE_*, TOKEN_ENCRYPTION_KEY, DASHBOARD_API_KEY
+cp .env.example .env          # renseigner DASHBOARD_API_KEY, JWT_SECRET, TOKEN_ENCRYPTION_KEY, GOOGLE_*
+docker compose up -d postgres # PostgreSQL local (ou une instance existante)
 export PYTHONPATH=$PWD
+python -m backend.db.migrate  # applique les migrations
 uvicorn backend.main:app --reload --port 8000
-# Terminal séparé
-streamlit run dashboard/app.py
+streamlit run dashboard/app.py    # terminal séparé
+python -m backend.worker          # optionnel : synchronisation périodique
+python infrastructure/scripts/seed_demo_data.py   # optionnel : données de démonstration
 ```
 
-### 10.2 Docker Compose (PostgreSQL local)
+### 10.2 Déploiement (Docker, EC2, HTTPS)
 
-```bash
-docker compose up -d postgres
-```
+Voir `infrastructure/README.md` : `bash infrastructure/scripts/deploy-stack.sh` après avoir renseigné le `.env`.
 
 ### 10.3 Dépôt GitHub
 

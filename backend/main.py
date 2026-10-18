@@ -1,20 +1,27 @@
+import json
+import logging
 import secrets
+import time
 import uuid
-from datetime import datetime, timezone
+from contextlib import asynccontextmanager
 
 from fastapi import Depends, FastAPI, Header, HTTPException, Query
 from pydantic import BaseModel, Field
-from sqlalchemy import func, select
-from sqlalchemy.dialects.postgresql import insert
+from sqlalchemy import func, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
+from starlette.concurrency import run_in_threadpool
 
 from backend.config import Settings, get_settings
 from backend.crypto import decrypt_text, encrypt_text
-from backend.db.models import MeetingClassification, OAuthConnection
-from backend.db.session import get_db, init_db
-from backend.services.classifier import MeetingInput, classify_meeting
-from backend.services.referential import SalesReferentialPayload, ensure_active_referential, load_default_referential
-from backend.db.models import DashboardAccount
+from backend.db.models import (
+    AppUser,
+    DashboardAccount,
+    MeetingClassification,
+    OAuthConnection,
+    Organization,
+    SalesReferential,
+)
+from backend.db.session import dispose_engine, get_db
 from backend.services.auth import (
     DashboardRole,
     StatsScope,
@@ -22,13 +29,44 @@ from backend.services.auth import (
     decode_access_token,
     verify_password,
 )
+from backend.services.referential import SalesReferentialPayload, ensure_active_referential
+from backend.services.sync import sync_users
 from backend.services.tenancy import get_oauth_connection, get_or_create_user_for_google
 from integration.google_calendar import create_event, list_events
 from integration.google_oauth import authorization_url, exchange_code
 
-app = FastAPI(title="CultureLive API", version="0.1.0")
+logger = logging.getLogger("culturelive.api")
 
-_oauth_states: dict[str, datetime] = {}
+OAUTH_STATE_TTL_SECONDS = 600
+_oauth_states: dict[str, float] = {}
+
+
+@asynccontextmanager
+async def lifespan(_: FastAPI):
+    problems = get_settings().startup_problems()
+    if problems:
+        raise RuntimeError("Configuration invalide : " + " ; ".join(problems))
+    if not get_settings().google_configured():
+        logger.warning("Google OAuth non configuré : routes Calendar indisponibles")
+    yield
+    await dispose_engine()
+
+
+app = FastAPI(title="CultureLive API", version="0.2.0", lifespan=lifespan)
+
+
+def require_admin_key(
+    settings: Settings = Depends(get_settings),
+    x_api_key: str | None = Header(default=None, alias="X-API-Key"),
+) -> None:
+    expected = settings.dashboard_api_key
+    if not expected or not x_api_key or not secrets.compare_digest(x_api_key, expected):
+        raise HTTPException(401, "Clé API admin requise (en-tête X-API-Key)")
+
+
+def require_google(settings: Settings = Depends(get_settings)) -> None:
+    if not settings.google_configured():
+        raise HTTPException(503, "Google OAuth non configuré")
 
 
 class LoginBody(BaseModel):
@@ -36,18 +74,31 @@ class LoginBody(BaseModel):
     password: str
 
 
+class CreateMeetingBody(BaseModel):
+    summary: str
+    description: str | None = None
+    start: str = Field(description="ISO 8601")
+    end: str
+    time_zone: str = "Europe/Paris"
+
+
+class ClassifyRangeBody(BaseModel):
+    time_min: str
+    time_max: str
+    user_id: uuid.UUID | None = None
+    force: bool = Field(default=False, description="Reclassifier même les événements inchangés")
+
+
 async def resolve_stats_scope(
     settings: Settings = Depends(get_settings),
     x_api_key: str | None = Header(default=None, alias="X-API-Key"),
     authorization: str | None = Header(default=None),
 ) -> StatsScope:
-    if settings.dashboard_api_key and x_api_key == settings.dashboard_api_key:
+    if x_api_key and settings.dashboard_api_key and secrets.compare_digest(x_api_key, settings.dashboard_api_key):
         return StatsScope(is_superadmin=True)
 
     if authorization and authorization.lower().startswith("bearer "):
         token = authorization.split(" ", 1)[1].strip()
-        if not settings.jwt_secret:
-            raise HTTPException(503, "JWT_SECRET non configuré")
         try:
             payload = decode_access_token(settings, token)
         except Exception as exc:
@@ -63,21 +114,22 @@ async def resolve_stats_scope(
     raise HTTPException(401, "Authentification requise (login ou X-API-Key)")
 
 
+@app.get("/health")
+async def health(session: AsyncSession = Depends(get_db)) -> dict:
+    await session.execute(select(1))
+    return {"status": "ok", "service": "culturelive", "database": "ok"}
+
+
 @app.post("/auth/dashboard/login")
 async def dashboard_login(
     body: LoginBody,
     session: AsyncSession = Depends(get_db),
     settings: Settings = Depends(get_settings),
 ):
-    if not settings.jwt_secret:
-        raise HTTPException(503, "JWT_SECRET non configuré")
-
     result = await session.execute(select(DashboardAccount).where(DashboardAccount.login == body.login))
     account = result.scalars().first()
     if not account or not verify_password(body.password, account.password_hash):
         raise HTTPException(401, "Identifiants invalides")
-
-    from backend.db.models import AppUser, Organization
 
     org = await session.get(Organization, account.organization_id)
     if not org:
@@ -113,51 +165,28 @@ async def dashboard_login(
     }
 
 
-class CreateMeetingBody(BaseModel):
-    summary: str
-    description: str | None = None
-    start: str = Field(description="ISO 8601")
-    end: str
-    time_zone: str = "Europe/Paris"
-
-
-class ClassifyRangeBody(BaseModel):
-    time_min: str
-    time_max: str
-    user_id: uuid.UUID | None = None
-
-
-@app.on_event("startup")
-async def startup() -> None:
-    await init_db()
-
-
-@app.get("/health")
-async def health() -> dict:
-    return {"status": "ok", "service": "culturelive"}
-
-
-@app.get("/auth/google")
+@app.get("/auth/google", dependencies=[Depends(require_google)])
 async def auth_google(settings: Settings = Depends(get_settings)):
-    if not settings.google_configured():
-        raise HTTPException(503, "Google OAuth non configuré")
+    now = time.time()
+    for key in [k for k, ts in _oauth_states.items() if now - ts > OAUTH_STATE_TTL_SECONDS]:
+        del _oauth_states[key]
     state = secrets.token_urlsafe(16)
-    _oauth_states[state] = datetime.now(timezone.utc)
+    _oauth_states[state] = now
     return {"authorization_url": authorization_url(settings, state)}
 
 
-@app.get("/auth/google/callback")
+@app.get("/auth/google/callback", dependencies=[Depends(require_google)])
 async def auth_google_callback(
     code: str,
     state: str,
     session: AsyncSession = Depends(get_db),
     settings: Settings = Depends(get_settings),
 ):
-    if state not in _oauth_states:
-        raise HTTPException(400, "State OAuth invalide")
-    del _oauth_states[state]
+    issued_at = _oauth_states.pop(state, None)
+    if issued_at is None or time.time() - issued_at > OAUTH_STATE_TTL_SECONDS:
+        raise HTTPException(400, "State OAuth invalide ou expiré")
 
-    refresh_token, email = exchange_code(settings, code)
+    refresh_token, email = await run_in_threadpool(exchange_code, settings, code)
     user, org = await get_or_create_user_for_google(session, email)
 
     encrypted = encrypt_text(refresh_token, settings.token_encryption_key or "")
@@ -183,17 +212,16 @@ async def _refresh_token_for_user(session: AsyncSession, user_id: uuid.UUID, set
     return decrypt_text(conn.encrypted_refresh_token, settings.token_encryption_key or "")
 
 
-@app.post("/meetings")
+@app.post("/meetings", dependencies=[Depends(require_admin_key), Depends(require_google)])
 async def post_meeting(
     body: CreateMeetingBody,
     user_id: uuid.UUID = Query(..., description="UUID interne utilisateur"),
     session: AsyncSession = Depends(get_db),
     settings: Settings = Depends(get_settings),
 ):
-    if not settings.google_configured():
-        raise HTTPException(503, "Google OAuth non configuré")
     token = await _refresh_token_for_user(session, user_id, settings)
-    event = create_event(
+    event = await run_in_threadpool(
+        create_event,
         settings,
         token,
         body.summary,
@@ -211,7 +239,7 @@ async def post_meeting(
     }
 
 
-@app.get("/meetings")
+@app.get("/meetings", dependencies=[Depends(require_admin_key), Depends(require_google)])
 async def get_meetings(
     time_min: str,
     time_max: str,
@@ -219,10 +247,8 @@ async def get_meetings(
     session: AsyncSession = Depends(get_db),
     settings: Settings = Depends(get_settings),
 ):
-    if not settings.google_configured():
-        raise HTTPException(503, "Google OAuth non configuré")
     token = await _refresh_token_for_user(session, user_id, settings)
-    events = list_events(settings, token, time_min, time_max)
+    events = await run_in_threadpool(list_events, settings, token, time_min, time_max)
     return {
         "count": len(events),
         "items": [
@@ -239,20 +265,15 @@ async def get_meetings(
     }
 
 
-@app.get("/referential")
+@app.get("/referential", dependencies=[Depends(require_admin_key)])
 async def get_referential(session: AsyncSession = Depends(get_db)):
     _, payload = await ensure_active_referential(session)
     return payload.model_dump()
 
 
-@app.put("/referential")
+@app.put("/referential", dependencies=[Depends(require_admin_key)])
 async def put_referential(payload: SalesReferentialPayload, session: AsyncSession = Depends(get_db)):
-    from backend.db.models import SalesReferential
-    import json
-
-    await session.execute(
-        SalesReferential.__table__.update().where(SalesReferential.is_active.is_(True)).values(is_active=False)
-    )
+    await session.execute(update(SalesReferential).where(SalesReferential.is_active.is_(True)).values(is_active=False))
     row = SalesReferential(
         name=payload.name,
         version=payload.version,
@@ -264,89 +285,33 @@ async def put_referential(payload: SalesReferentialPayload, session: AsyncSessio
     return {"updated": True, "referential_id": str(row.id)}
 
 
-@app.post("/classify/sync")
+@app.post("/classify/sync", dependencies=[Depends(require_admin_key), Depends(require_google)])
 async def classify_sync(
     body: ClassifyRangeBody,
     session: AsyncSession = Depends(get_db),
     settings: Settings = Depends(get_settings),
 ):
-    if not settings.google_configured():
-        raise HTTPException(503, "Google OAuth non configuré")
+    user_ids = [body.user_id] if body.user_id else None
+    if body.user_id and not await get_oauth_connection(session, body.user_id):
+        raise HTTPException(404, "Aucune connexion Google pour cet utilisateur")
+    if user_ids is None:
+        connected = await session.execute(select(func.count()).select_from(OAuthConnection))
+        if connected.scalar_one() == 0:
+            raise HTTPException(404, "Aucun utilisateur connecté à Google")
 
-    ref_row, ref_payload = await ensure_active_referential(session)
-
-    if body.user_id:
-        user_ids = [body.user_id]
-    else:
-        result = await session.execute(select(OAuthConnection.user_id))
-        user_ids = list({row[0] for row in result.all()})
-
-    if not user_ids:
-        raise HTTPException(404, "Aucun utilisateur connecté à Google")
-
-    stored = 0
-    for uid in user_ids:
-        from backend.db.models import AppUser
-
-        user = await session.get(AppUser, uid)
-        if not user:
-            continue
-        token = await _refresh_token_for_user(session, uid, settings)
-        events = list_events(settings, token, body.time_min, body.time_max)
-        for ev in events:
-            classification = await classify_meeting(
-                settings,
-                MeetingInput(
-                    event_id=ev.id,
-                    title=ev.title,
-                    description=ev.description,
-                    start_iso=ev.start.isoformat(),
-                    end_iso=ev.end.isoformat(),
-                ),
-                ref_payload,
-            )
-            stmt = insert(MeetingClassification).values(
-                google_event_id=ev.id,
-                calendar_id="primary",
-                user_id=user.id,
-                organization_id=user.organization_id,
-                referential_id=ref_row.id,
-                title=ev.title,
-                description=ev.description,
-                start_at=ev.start,
-                end_at=ev.end,
-                category_id=classification.category_id,
-                category_label=classification.category_label,
-                confidence=classification.confidence,
-                rationale=classification.rationale,
-                raw_event=ev.raw,
-            )
-            stmt = stmt.on_conflict_do_update(
-                constraint="uq_event_user",
-                set_={
-                    "category_id": classification.category_id,
-                    "category_label": classification.category_label,
-                    "confidence": classification.confidence,
-                    "rationale": classification.rationale,
-                    "classified_at": func.now(),
-                },
-            )
-            await session.execute(stmt)
-            stored += 1
-
-    await session.commit()
-    return {"classified": stored}
+    result = await sync_users(session, settings, body.time_min, body.time_max, user_ids, body.force)
+    return result.as_dict()
 
 
-def _apply_scope_to_meetings(scope: StatsScope):
-    q_filters = []
+def _scope_filters(scope: StatsScope) -> list:
+    filters = []
     if scope.is_superadmin:
-        return q_filters
+        return filters
     if scope.organization_id:
-        q_filters.append(MeetingClassification.organization_id == uuid.UUID(scope.organization_id))
+        filters.append(MeetingClassification.organization_id == uuid.UUID(scope.organization_id))
     if scope.role == DashboardRole.SALES_USER and scope.user_id:
-        q_filters.append(MeetingClassification.user_id == uuid.UUID(scope.user_id))
-    return q_filters
+        filters.append(MeetingClassification.user_id == uuid.UUID(scope.user_id))
+    return filters
 
 
 @app.get("/stats/overview")
@@ -354,9 +319,7 @@ async def stats_overview(
     scope: StatsScope = Depends(resolve_stats_scope),
     session: AsyncSession = Depends(get_db),
 ):
-    from backend.db.models import AppUser, Organization
-
-    scope_filters = _apply_scope_to_meetings(scope)
+    filters = _scope_filters(scope)
 
     org_q = (
         select(Organization.public_ref, func.count(MeetingClassification.id))
@@ -374,7 +337,7 @@ async def stats_overview(
         func.count(),
     ).group_by(MeetingClassification.category_id, MeetingClassification.category_label)
 
-    for f in scope_filters:
+    for f in filters:
         org_q = org_q.where(f)
         user_q = user_q.where(f)
         cat_q = cat_q.where(f)
@@ -398,12 +361,10 @@ async def stats_overview(
 async def stats_meetings(
     organization_ref: str | None = None,
     user_ref: str | None = None,
-    limit: int = 100,
+    limit: int = Query(100, ge=1, le=1000),
     scope: StatsScope = Depends(resolve_stats_scope),
     session: AsyncSession = Depends(get_db),
 ):
-    from backend.db.models import AppUser, Organization
-
     q = (
         select(
             MeetingClassification.title,
@@ -418,7 +379,7 @@ async def stats_meetings(
         .order_by(MeetingClassification.start_at.desc())
         .limit(limit)
     )
-    for f in _apply_scope_to_meetings(scope):
+    for f in _scope_filters(scope):
         q = q.where(f)
 
     if organization_ref:
@@ -442,8 +403,3 @@ async def stats_meetings(
         }
         for r in rows.all()
     ]
-
-
-@app.get("/dev/default-referential")
-async def dev_default_referential():
-    return load_default_referential().model_dump()

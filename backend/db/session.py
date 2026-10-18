@@ -3,7 +3,6 @@ from collections.abc import AsyncGenerator
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 
 from backend.config import get_settings
-from backend.db.models import Base
 
 _engine = None
 _session_factory = None
@@ -12,7 +11,7 @@ _session_factory = None
 def get_engine():
     global _engine
     if _engine is None:
-        _engine = create_async_engine(get_settings().database_url, echo=False)
+        _engine = create_async_engine(get_settings().database_url, echo=False, pool_pre_ping=True)
     return _engine
 
 
@@ -23,9 +22,12 @@ def get_session_factory() -> async_sessionmaker[AsyncSession]:
     return _session_factory
 
 
-async def init_db() -> None:
-    async with get_engine().begin() as conn:
-        await conn.run_sync(Base.metadata.create_all)
+async def dispose_engine() -> None:
+    global _engine, _session_factory
+    if _engine is not None:
+        await _engine.dispose()
+    _engine = None
+    _session_factory = None
 
 
 async def get_db() -> AsyncGenerator[AsyncSession, None]:

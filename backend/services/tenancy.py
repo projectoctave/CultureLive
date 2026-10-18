@@ -4,7 +4,7 @@ import secrets
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from backend.db.models import AppUser, Organization, OAuthConnection
+from backend.db.models import AppUser, OAuthConnection, Organization
 
 
 def _public_ref(prefix: str) -> str:
