@@ -15,9 +15,11 @@ class Organization(Base):
 
     id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
     public_ref: Mapped[str] = mapped_column(String(32), unique=True, index=True)
+    display_name: Mapped[str | None] = mapped_column(String(128), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
     users: Mapped[list["AppUser"]] = relationship(back_populates="organization")
+    dashboard_accounts: Mapped[list["DashboardAccount"]] = relationship(back_populates="organization")
 
 
 class AppUser(Base):
@@ -30,6 +32,26 @@ class AppUser(Base):
 
     organization: Mapped["Organization"] = relationship(back_populates="users")
     oauth_connections: Mapped[list["OAuthConnection"]] = relationship(back_populates="user")
+    dashboard_account: Mapped["DashboardAccount | None"] = relationship(
+        back_populates="user", uselist=False
+    )
+
+
+class DashboardAccount(Base):
+    __tablename__ = "dashboard_accounts"
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    login: Mapped[str] = mapped_column(String(64), unique=True, index=True)
+    password_hash: Mapped[str] = mapped_column(String(256))
+    role: Mapped[str] = mapped_column(String(32))
+    organization_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("organizations.id", ondelete="CASCADE"))
+    user_id: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("app_users.id", ondelete="CASCADE"), nullable=True
+    )
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+    organization: Mapped["Organization"] = relationship(back_populates="dashboard_accounts")
+    user: Mapped["AppUser | None"] = relationship(back_populates="dashboard_account")
 
 
 class OAuthConnection(Base):

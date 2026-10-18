@@ -15,6 +15,7 @@ class Settings(BaseSettings):
     openai_api_key: str | None = None
     openai_model: str = "gpt-4o-mini"
     dashboard_api_key: str | None = None
+    jwt_secret: str | None = None
     backend_host: str = "0.0.0.0"
     backend_port: int = 8000
 

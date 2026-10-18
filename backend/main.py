@@ -14,6 +14,14 @@ from backend.db.models import MeetingClassification, OAuthConnection
 from backend.db.session import get_db, init_db
 from backend.services.classifier import MeetingInput, classify_meeting
 from backend.services.referential import SalesReferentialPayload, ensure_active_referential, load_default_referential
+from backend.db.models import DashboardAccount
+from backend.services.auth import (
+    DashboardRole,
+    StatsScope,
+    create_access_token,
+    decode_access_token,
+    verify_password,
+)
 from backend.services.tenancy import get_oauth_connection, get_or_create_user_for_google
 from integration.google_calendar import create_event, list_events
 from integration.google_oauth import authorization_url, exchange_code
@@ -23,14 +31,86 @@ app = FastAPI(title="CultureLive API", version="0.1.0")
 _oauth_states: dict[str, datetime] = {}
 
 
-def require_dashboard_key(
+class LoginBody(BaseModel):
+    login: str
+    password: str
+
+
+async def resolve_stats_scope(
     settings: Settings = Depends(get_settings),
     x_api_key: str | None = Header(default=None, alias="X-API-Key"),
-) -> None:
-    if not settings.dashboard_api_key:
-        raise HTTPException(503, "DASHBOARD_API_KEY non configurée")
-    if x_api_key != settings.dashboard_api_key:
-        raise HTTPException(401, "Clé API invalide")
+    authorization: str | None = Header(default=None),
+) -> StatsScope:
+    if settings.dashboard_api_key and x_api_key == settings.dashboard_api_key:
+        return StatsScope(is_superadmin=True)
+
+    if authorization and authorization.lower().startswith("bearer "):
+        token = authorization.split(" ", 1)[1].strip()
+        if not settings.jwt_secret:
+            raise HTTPException(503, "JWT_SECRET non configuré")
+        try:
+            payload = decode_access_token(settings, token)
+        except Exception as exc:
+            raise HTTPException(401, "Token invalide") from exc
+        return StatsScope(
+            role=payload.role,
+            organization_ref=payload.organization_ref,
+            user_ref=payload.user_ref,
+            organization_id=payload.organization_id,
+            user_id=payload.user_id,
+        )
+
+    raise HTTPException(401, "Authentification requise (login ou X-API-Key)")
+
+
+@app.post("/auth/dashboard/login")
+async def dashboard_login(
+    body: LoginBody,
+    session: AsyncSession = Depends(get_db),
+    settings: Settings = Depends(get_settings),
+):
+    if not settings.jwt_secret:
+        raise HTTPException(503, "JWT_SECRET non configuré")
+
+    result = await session.execute(select(DashboardAccount).where(DashboardAccount.login == body.login))
+    account = result.scalars().first()
+    if not account or not verify_password(body.password, account.password_hash):
+        raise HTTPException(401, "Identifiants invalides")
+
+    from backend.db.models import AppUser, Organization
+
+    org = await session.get(Organization, account.organization_id)
+    if not org:
+        raise HTTPException(500, "Organisation introuvable")
+
+    user_ref: str | None = None
+    user_id: str | None = None
+    if account.user_id:
+        user = await session.get(AppUser, account.user_id)
+        if user:
+            user_ref = user.public_ref
+            user_id = str(user.id)
+
+    role = DashboardRole(account.role)
+    token = create_access_token(
+        settings,
+        {
+            "sub": account.login,
+            "role": role.value,
+            "organization_ref": org.public_ref,
+            "organization_id": str(org.id),
+            "user_ref": user_ref,
+            "user_id": user_id,
+        },
+    )
+    return {
+        "access_token": token,
+        "token_type": "bearer",
+        "role": role.value,
+        "organization_ref": org.public_ref,
+        "user_ref": user_ref,
+        "display_name": org.display_name,
+    }
 
 
 class CreateMeetingBody(BaseModel):
@@ -258,28 +338,56 @@ async def classify_sync(
     return {"classified": stored}
 
 
+def _apply_scope_to_meetings(scope: StatsScope):
+    q_filters = []
+    if scope.is_superadmin:
+        return q_filters
+    if scope.organization_id:
+        q_filters.append(MeetingClassification.organization_id == uuid.UUID(scope.organization_id))
+    if scope.role == DashboardRole.SALES_USER and scope.user_id:
+        q_filters.append(MeetingClassification.user_id == uuid.UUID(scope.user_id))
+    return q_filters
+
+
 @app.get("/stats/overview")
 async def stats_overview(
-    _: None = Depends(require_dashboard_key),
+    scope: StatsScope = Depends(resolve_stats_scope),
     session: AsyncSession = Depends(get_db),
 ):
     from backend.db.models import AppUser, Organization
 
-    by_org = await session.execute(
+    scope_filters = _apply_scope_to_meetings(scope)
+
+    org_q = (
         select(Organization.public_ref, func.count(MeetingClassification.id))
         .join(MeetingClassification, MeetingClassification.organization_id == Organization.id)
         .group_by(Organization.public_ref)
     )
-    by_user = await session.execute(
+    user_q = (
         select(AppUser.public_ref, func.count(MeetingClassification.id))
         .join(MeetingClassification, MeetingClassification.user_id == AppUser.id)
         .group_by(AppUser.public_ref)
     )
-    by_category = await session.execute(
-        select(MeetingClassification.category_id, MeetingClassification.category_label, func.count())
-        .group_by(MeetingClassification.category_id, MeetingClassification.category_label)
-    )
+    cat_q = select(
+        MeetingClassification.category_id,
+        MeetingClassification.category_label,
+        func.count(),
+    ).group_by(MeetingClassification.category_id, MeetingClassification.category_label)
+
+    for f in scope_filters:
+        org_q = org_q.where(f)
+        user_q = user_q.where(f)
+        cat_q = cat_q.where(f)
+
+    by_org = await session.execute(org_q)
+    by_user = await session.execute(user_q)
+    by_category = await session.execute(cat_q)
     return {
+        "scope": {
+            "role": scope.role.value if scope.role else "superadmin",
+            "organization_ref": scope.organization_ref,
+            "user_ref": scope.user_ref,
+        },
         "by_organization": [{"organization_ref": r[0], "meetings": r[1]} for r in by_org.all()],
         "by_user": [{"user_ref": r[0], "meetings": r[1]} for r in by_user.all()],
         "by_category": [{"category_id": r[0], "label": r[1], "count": r[2]} for r in by_category.all()],
@@ -291,7 +399,7 @@ async def stats_meetings(
     organization_ref: str | None = None,
     user_ref: str | None = None,
     limit: int = 100,
-    _: None = Depends(require_dashboard_key),
+    scope: StatsScope = Depends(resolve_stats_scope),
     session: AsyncSession = Depends(get_db),
 ):
     from backend.db.models import AppUser, Organization
@@ -310,9 +418,16 @@ async def stats_meetings(
         .order_by(MeetingClassification.start_at.desc())
         .limit(limit)
     )
+    for f in _apply_scope_to_meetings(scope):
+        q = q.where(f)
+
     if organization_ref:
+        if scope.organization_ref and organization_ref != scope.organization_ref and not scope.is_superadmin:
+            raise HTTPException(403, "Accès organisation refusé")
         q = q.where(Organization.public_ref == organization_ref)
     if user_ref:
+        if scope.user_ref and user_ref != scope.user_ref and scope.role == DashboardRole.SALES_USER:
+            raise HTTPException(403, "Accès utilisateur refusé")
         q = q.where(AppUser.public_ref == user_ref)
 
     rows = await session.execute(q)

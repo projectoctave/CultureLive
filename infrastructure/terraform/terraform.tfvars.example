@@ -1,0 +1,7 @@
+aws_region        = "eu-west-3"
+instance_type     = "t3.small"
+key_name          = "your-ec2-keypair"
+ssh_cidr          = "203.0.113.10/32"
+domain_name       = "culturelive.example.com"
+letsencrypt_email = "admin@example.com"
+repo_clone_url    = "https://github.com/Lancs0022/CultureLive.git"

@@ -1,0 +1,36 @@
+#!/usr/bin/env bash
+# Config nginx HTTP-only (bootstrap avant certificat).
+set -euo pipefail
+
+: "${DOMAIN_NAME:?}"
+
+cat > nginx/default.conf <<EOF
+upstream culturelive_api { server api:8000; }
+upstream culturelive_dashboard { server dashboard:8501; }
+
+server {
+    listen 80;
+    server_name ${DOMAIN_NAME};
+
+    location /.well-known/acme-challenge/ {
+        root /var/www/certbot;
+    }
+
+    location /api/ {
+        proxy_pass http://culturelive_api/;
+        proxy_set_header Host \$host;
+        proxy_set_header X-Real-IP \$remote_addr;
+        proxy_set_header X-Forwarded-Proto \$scheme;
+    }
+
+    location / {
+        proxy_pass http://culturelive_dashboard/;
+        proxy_http_version 1.1;
+        proxy_set_header Upgrade \$http_upgrade;
+        proxy_set_header Connection "upgrade";
+        proxy_set_header Host \$host;
+    }
+}
+EOF
+
+echo "nginx/default.conf (HTTP) généré pour ${DOMAIN_NAME}"

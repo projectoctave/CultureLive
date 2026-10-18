@@ -1,0 +1,96 @@
+name: culturelive
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-cultur_live}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-cultur_live}
+      POSTGRES_DB: ${POSTGRES_DB:-cultur_live}
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-cultur_live}"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+    networks:
+      - culturelive
+
+  api:
+    build:
+      context: ..
+      dockerfile: infrastructure/docker/Dockerfile.api
+    restart: unless-stopped
+    env_file:
+      - ${ENV_FILE:-../.env}
+    environment:
+      DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER:-cultur_live}:${POSTGRES_PASSWORD:-cultur_live}@postgres:5432/${POSTGRES_DB:-cultur_live}
+      PUBLIC_BASE_URL: https://${DOMAIN_NAME}
+      GOOGLE_REDIRECT_URI: https://${DOMAIN_NAME}/api/auth/google/callback
+    depends_on:
+      postgres:
+        condition: service_healthy
+    networks:
+      - culturelive
+
+  dashboard:
+    build:
+      context: ..
+      dockerfile: infrastructure/docker/Dockerfile.dashboard
+    restart: unless-stopped
+    environment:
+      BACKEND_URL: http://api:8000
+    depends_on:
+      - api
+    networks:
+      - culturelive
+
+  nginx:
+    image: nginx:1.27-alpine
+    restart: unless-stopped
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./nginx/default.conf:/etc/nginx/conf.d/default.conf:ro
+      - certbot-www:/var/www/certbot:ro
+      - certbot-certs:/etc/letsencrypt:ro
+    depends_on:
+      - api
+      - dashboard
+    networks:
+      - culturelive
+
+  certbot:
+    image: certbot/certbot:v2.11.0
+    volumes:
+      - certbot-www:/var/www/certbot
+      - certbot-certs:/etc/letsencrypt
+    entrypoint: /bin/sh -c "trap exit TERM; while :; do certbot renew --webroot -w /var/www/certbot --quiet; sleep 12h & wait $${!}; done"
+    networks:
+      - culturelive
+
+  seed:
+    profiles: ["seed"]
+    build:
+      context: ..
+      dockerfile: infrastructure/docker/Dockerfile.seed
+    env_file:
+      - ${ENV_FILE:-../.env}
+    environment:
+      DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER:-cultur_live}:${POSTGRES_PASSWORD:-cultur_live}@postgres:5432/${POSTGRES_DB:-cultur_live}
+    depends_on:
+      postgres:
+        condition: service_healthy
+    networks:
+      - culturelive
+
+networks:
+  culturelive:
+
+volumes:
+  pgdata:
+  certbot-www:
+  certbot-certs:
