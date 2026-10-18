@@ -1,0 +1,47 @@
+{
+  "version": "1.0.0",
+  "name": "culturelive-sales-default",
+  "description": "Typologie sales CultureLive — personnalisable via API",
+  "categories": [
+    {
+      "id": "cold_call",
+      "label": "Cold call",
+      "description": "Premier contact à froid, prospection sortante."
+    },
+    {
+      "id": "discovery_call",
+      "label": "Discovery call",
+      "description": "Qualification du besoin, cartographie des enjeux."
+    },
+    {
+      "id": "demo",
+      "label": "Démo produit",
+      "description": "Présentation produit, walkthrough, POC."
+    },
+    {
+      "id": "negotiation",
+      "label": "Négociation / closing",
+      "description": "Pricing, contrat, closing."
+    },
+    {
+      "id": "follow_up",
+      "label": "Follow-up",
+      "description": "Suivi commercial, next steps."
+    },
+    {
+      "id": "customer_success",
+      "label": "Customer success",
+      "description": "Onboarding, QBR, adoption post-vente."
+    },
+    {
+      "id": "internal",
+      "label": "Interne sales",
+      "description": "Pipeline review, coaching, prep — hors client."
+    },
+    {
+      "id": "other",
+      "label": "Autre",
+      "description": "Hors typologie ci-dessus."
+    }
+  ]
+}

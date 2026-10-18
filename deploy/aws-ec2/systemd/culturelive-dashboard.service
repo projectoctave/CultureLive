@@ -1,0 +1,16 @@
+[Unit]
+Description=CultureLive Streamlit Dashboard
+After=network.target culturelive-api.service
+
+[Service]
+Type=simple
+User=ubuntu
+WorkingDirectory=/opt/culturelive
+EnvironmentFile=/opt/culturelive/.env
+Environment=BACKEND_URL=http://127.0.0.1:8000
+ExecStart=/opt/culturelive/.venv/bin/streamlit run dashboard/app.py --server.port 8501 --server.address 127.0.0.1
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target

@@ -1,0 +1,1 @@
+"""Intégrations externes (Google Calendar)."""
