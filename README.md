@@ -13,11 +13,15 @@
 
 CultureLive est un **microservice** qui connecte l’agenda **Google Calendar** d’un utilisateur commercial, permet de **créer** et **lire** des réunions sur une période donnée, puis d’**analyser** ces réunions pour les **classifier** selon une **typologie sales** (référentiel paramétrable, enrichissement IA optionnel). Les résultats sont **persistés** dans **PostgreSQL** et **visualisés** via un **dashboard** dont les statistiques sont **segmentées par entreprise et par utilisateur**, sans exposer de données personnelles identifiables (PII).
 
+Depuis la v0.3, CultureLive est aussi un **outil de coaching commercial** : en plus de la typologie des réunions, il suit l'effort de prospection (appels, emails, LinkedIn, comptes touchés), le pipe (opportunités, étapes, couverture du quota), les objectifs, la motivation (points, challenges) et propose au manager des **alertes avec action suggérée** pour animer son équipe.
+
 ### 1.1 Objectifs métier
 
 - Donner une vision structurée du temps commercial passé en réunion (cold call, discovery, démo, etc.).
 - Permettre un référentiel de typologie **custom** (évolution métier, verticals, langues).
 - Préparer des agrégats anonymisés pour pilotage et tableaux de bord.
+- Contrôler l'activité de prospection et motiver les commerciaux à chasser de nouveaux comptes (indice de chasse, séries, challenges).
+- Garantir un pipe suffisant et sain : couverture du quota, deals dormants, prochaines étapes, entonnoir de conquête.
 
 ### 1.2 Périmètre (inclus)
 
@@ -27,10 +31,12 @@ CultureLive est un **microservice** qui connecte l’agenda **Google Calendar** 
 | **B2 — Classification** | Classification des meetings récupérés + stockage PostgreSQL |
 | **B3 — Dashboard** | Login par entreprise / par sales ; l’admin d’une entreprise voit toute son équipe, un sales ne voit que lui |
 | **B4 — Qualité** | Tests fonctionnels (classification, DB, flux Google simulé, migrations, auth) + CI GitHub Actions ; tests Google live prêts mais non exécutés |
+| **B6 — Pilotage commercial** | Modèle comptes / activités / opportunités / objectifs / challenges / plan de coaching, API `/coach/*`, vues manager et commercial du dashboard, alertes de coaching, jeu de données de démonstration à profils types (voir 3.5) |
 | **B5 — Déploiement** | `infrastructure/` : Docker (PostgreSQL, API, worker, dashboard, nginx, certbot), Terraform EC2, Let’s Encrypt |
 
 ### 1.3 Hors périmètre (explicite)
 
+- Connecteurs CRM (HubSpot, Salesforce, Pipedrive) : comptes, activités et opportunités sont aujourd'hui alimentés par l'API (`POST /coach/activities`, import) et par le seed de démonstration ; la synchronisation CRM est une évolution prévue.
 - Synchronisation temps réel (webhooks Google) — la synchronisation est périodique (worker).
 - Multi-calendriers avancés, salles, ressources.
 - SSO entreprise (SAML/OIDC) — OAuth Google utilisateur uniquement.
@@ -73,10 +79,13 @@ Le dépôt est séparé en deux blocs : le code applicatif (`application/`) et l
 | Dossier | Rôle |
 |---------|------|
 | `application/` | Tout le code applicatif Python (`pyproject.toml`, `alembic.ini`, `docker-compose.dev.yml` pour la base locale) |
-| `application/backend/` | API REST, règles métier, classifier, modèle de données, endpoints stats, worker |
+| `application/backend/` | API REST, règles métier, classifier, modèle de données, endpoints stats et `/coach`, worker |
+| `application/backend/services/analytics.py` | Indicateurs de pilotage (indice de chasse, entonnoir, pipe, classement) |
+| `application/backend/services/coaching.py` | Règles d'alertes de coaching |
+| `application/backend/demo_data.py` | Jeu de données de démonstration à profils types |
 | `application/backend/migrations/` | Migrations Alembic (schéma de la base) |
 | `application/integration/` | Couche d’intégration Google (OAuth, client Calendar) |
-| `application/dashboard/` | Application Streamlit consommant l’API stats (login entreprise / sales) |
+| `application/dashboard/` | Application Streamlit (login entreprise / sales) : vue manager (tour de contrôle, prospection, pipeline, motivation, coaching, rendez-vous) et vue commercial (ma semaine, mes comptes et deals, défis) |
 | `application/referential/` | Référentiel typologie sales par défaut (JSON) |
 | `application/tests/` | Tests fonctionnels (classification, DB, auth, flux Google simulé, migrations) et tests Google live |
 | `infrastructure/` | Docker Compose, Dockerfiles, nginx, Let’s Encrypt, seed de démo, Terraform (**AWS EC2**) |
@@ -285,6 +294,7 @@ pytest tests/test_google_integration.py -v -m google_live
 2. **Alimentation** : création manuelle ou réunions existantes dans Google Calendar.
 3. **Analyse** : le worker synchronise périodiquement (ou appel manuel de `POST /classify/sync`) ; seuls les événements nouveaux ou modifiés sont classifiés.
 4. **Pilotage** : connexion au dashboard ; l’admin d’une entreprise voit son équipe, un sales voit sa propre activité.
+5. **Coaching** : le manager ouvre la tour de contrôle du lundi, traite les alertes (une action de coaching en un clic), ajuste les objectifs, lance un challenge ; le commercial retrouve ses actions, ses comptes à attaquer et ses deals à relancer dans « Ma semaine ».
 
 ```mermaid
 sequenceDiagram
@@ -314,9 +324,10 @@ sequenceDiagram
 
 | Version | Thème |
 |---------|--------|
-| v0.3 | Webhooks Google (temps réel) |
-| v0.4 | Référentiels multiples par organisation |
-| v0.5 | Export BI (CSV, API), correction manuelle de la catégorie, métriques OTel |
+| v0.3 | Pilotage de la prospection et du pipe (livré) |
+| v0.4 | Connecteur CRM (comptes, activités, opportunités), webhooks Google (temps réel) |
+| v0.5 | Référentiels multiples par organisation |
+| v0.6 | Export BI (CSV, API), correction manuelle de la catégorie, métriques OTel |
 | v1.0 | Durcissement prod (sauvegardes automatiques, RDS Multi-AZ, rotation des secrets, audit) |
 
 ---
@@ -339,6 +350,18 @@ streamlit run dashboard/app.py    # terminal séparé
 python -m backend.worker          # optionnel : synchronisation périodique
 python ../infrastructure/scripts/seed_demo_data.py   # optionnel : 3 entreprises, 11 commerciaux, 12 semaines d'activité et de pipe
 ```
+
+#### Comptes de démonstration
+
+Après `seed_demo_data.py` (mots de passe publics : ne jamais charger en production) :
+
+| Entreprise | Manager | Commerciaux (profil) |
+|------------|---------|----------------------|
+| Nova Sales | `nova_admin` / `NovaAdmin!2026` | `nova.alice` (chasseur régulier), `nova.bob` (décrochage), `nova.chloe` (junior en montée), `nova.david` (farming), `nova.emma` (volume sans qualité) |
+| Helios Corp | `helios_admin` / `HeliosAdmin!2026` | `helios.dan` (closer), `helios.eva` (régulière), `helios.fay` (junior) |
+| Zephyr B2B | `zephyr_admin` / `ZephyrAdmin!2026` | `zephyr.gus`, `zephyr.hana`, `zephyr.ian` |
+
+Le mot de passe d'un commercial suit le motif `<Entreprise><Prénom>!2026` (ex. `nova.david` / `NovaDavid!2026`).
 
 ### 10.2 Déploiement (Docker, EC2, HTTPS)
 

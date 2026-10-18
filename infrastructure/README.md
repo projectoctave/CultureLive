@@ -11,7 +11,7 @@ Stack **dockerisée** pour une instance **AWS EC2** : **PostgreSQL**, **API**, *
 | `nginx/` | Templates nginx : HTTP (bootstrap ACME) et HTTPS (redirection 80 -> 443) |
 | `scripts/deploy-stack.sh` | Déploiement one-go |
 | `scripts/init-letsencrypt.sh` | Obtention du certificat + bascule HTTPS |
-| `scripts/seed_demo_data.py` | Données fake : 3 entreprises x 3 sales |
+| `scripts/seed_demo_data.py` | Données fake : 3 entreprises, 11 commerciaux, 12 semaines d'activité, pipe, objectifs, challenges |
 | `terraform/` | EC2 (Ubuntu 24.04) + IP élastique + security group |
 
 ## Services
@@ -70,7 +70,9 @@ cd infrastructure
 docker compose --env-file ../.env --profile seed run --rm seed
 ```
 
-Le script affiche les comptes (login / mot de passe) : par exemple `nova_admin` voit toute l'équipe Nova, `nova.alice` ne voit que sa propre activité.
+Le script (idempotent : il recrée les 3 entreprises de démo) affiche les comptes (login / mot de passe). `nova_admin` voit toute l'équipe Nova (vue manager : tour de contrôle, prospection, pipeline, motivation, coaching), `nova.alice` ne voit que sa propre semaine. Chaque commercial incarne un profil type : `nova.alice` chasseur régulier, `nova.bob` en décrochage, `nova.chloe` junior en montée en charge, `nova.david` account manager qui ne chasse plus, `nova.emma` gros volume sans qualité.
+
+Les données sont générées relativement à la date du jour (12 semaines d'historique), la graine est fixe : relancer le seed donne des chiffres comparables.
 
 ## Terraform (EC2)
 

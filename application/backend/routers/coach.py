@@ -39,8 +39,8 @@ class CoachingActionBody(BaseModel):
     user_ref: str
     kind: CoachingKind
     title: str = Field(min_length=3, max_length=256)
-    note: str | None = None
-    related_metric: str | None = None
+    note: str | None = Field(default=None, max_length=2000)
+    related_metric: str | None = Field(default=None, max_length=64)
     due_on: date | None = None
 
 
@@ -50,15 +50,15 @@ class CoachingActionPatch(BaseModel):
 
 class TargetBody(BaseModel):
     user_ref: str | None = Field(default=None, description="Vide = objectif par défaut de l'équipe")
-    metric: str
+    metric: str = Field(max_length=64)
     period: Literal["week", "quarter"] = "week"
     target_value: float = Field(ge=0)
 
 
 class ChallengeBody(BaseModel):
     name: str = Field(min_length=3, max_length=128)
-    description: str | None = None
-    metric: str
+    description: str | None = Field(default=None, max_length=2000)
+    metric: str = Field(max_length=64)
     scope: Literal["individual", "team"] = "individual"
     target_value: float = Field(gt=0)
     starts_on: date
