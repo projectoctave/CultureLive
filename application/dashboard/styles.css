@@ -103,34 +103,18 @@ header[data-testid="stHeader"] {
   display: inline-block;
 }
 
-.cl-kpi-row {
-  display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
-  gap: 0.75rem;
-  margin-bottom: 1.25rem;
-}
-
-.cl-kpi {
-  background: #fff;
-  border: 1px solid var(--cl-border);
-  border-radius: var(--cl-radius);
-  padding: 0.85rem 1rem;
-}
-
-.cl-kpi-label {
-  font-size: 0.72rem;
+div[data-testid="stMetric"] label {
+  font-size: 0.72rem !important;
   text-transform: uppercase;
   letter-spacing: 0.06em;
-  color: var(--cl-grape-light);
-  font-weight: 600;
+  color: var(--cl-grape-light) !important;
+  font-weight: 600 !important;
 }
 
-.cl-kpi-value {
-  font-family: "Outfit", sans-serif;
-  font-size: 1.75rem;
-  font-weight: 700;
-  color: var(--cl-peach);
-  line-height: 1.1;
+div[data-testid="stMetric"] [data-testid="stMetricValue"] {
+  font-family: "Outfit", sans-serif !important;
+  color: var(--cl-peach) !important;
+  font-weight: 700 !important;
 }
 
 div[data-testid="stForm"] {
@@ -160,10 +144,11 @@ div[data-testid="stButton"] button:hover {
 }
 
 div[data-testid="stMetric"] {
-  background: var(--cl-gylcine-soft);
+  background: #fff;
   border-radius: var(--cl-radius);
-  padding: 0.75rem 1rem;
+  padding: 0.85rem 1rem;
   border: 1px solid var(--cl-border);
+  box-shadow: 0 4px 16px rgba(25, 16, 83, 0.04);
 }
 
 h1,

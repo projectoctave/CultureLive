@@ -74,16 +74,10 @@ def section_title(text: str) -> None:
 
 
 def kpi_row(items: list[tuple[str, str | int]]) -> None:
-    cells = "".join(
-        f"""
-        <div class="cl-kpi">
-          <div class="cl-kpi-label">{label}</div>
-          <div class="cl-kpi-value">{value}</div>
-        </div>
-        """
-        for label, value in items
-    )
-    st.markdown(f'<div class="cl-kpi-row">{cells}</div>', unsafe_allow_html=True)
+    cols = st.columns(len(items))
+    for col, (label, value) in zip(cols, items, strict=True):
+        with col:
+            st.metric(label=label, value=value)
 
 
 def apply_figure_style(fig) -> None:
