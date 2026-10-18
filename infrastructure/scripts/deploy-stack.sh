@@ -12,6 +12,8 @@ SKIP_TLS="${SKIP_TLS:-false}"
 bash "$SCRIPT_DIR/render-nginx-http-only.sh"
 $DC build
 $DC up -d --wait postgres api worker dashboard nginx certbot
+# nginx résout les upstreams au démarrage : le recharger si api/dashboard ont été recréés (sinon 502).
+$DC restart nginx
 
 if [[ "$SKIP_TLS" != "true" ]]; then
   bash "$SCRIPT_DIR/init-letsencrypt.sh"
