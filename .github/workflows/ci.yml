@@ -28,6 +28,9 @@ jobs:
           --health-interval 5s
           --health-timeout 5s
           --health-retries 10
+    defaults:
+      run:
+        working-directory: application
     env:
       DATABASE_URL: postgresql+asyncpg://postgres:postgres@localhost:5432/culturelive_test
     steps:
@@ -36,7 +39,7 @@ jobs:
         with:
           python-version: "3.12"
           cache: pip
-          cache-dependency-path: pyproject.toml
+          cache-dependency-path: application/pyproject.toml
       - name: Install
         run: pip install -e ".[dev]"
       - name: Lint

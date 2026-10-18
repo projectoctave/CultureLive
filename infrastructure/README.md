@@ -98,7 +98,7 @@ Non vérifié :
 
 - **l'émission réelle d'un certificat Let's Encrypt** (exige un vrai domaine) : la commande certbot est exécutée jusqu'au serveur de staging, qui n'a refusé que l'email factice utilisé pour le test ;
 - `terraform apply` sur un vrai compte AWS ;
-- le flux Google avec un vrai compte (voir `tests/test_google_flow_mocked.py` pour la couverture avec Google simulé).
+- le flux Google avec un vrai compte (voir `application/tests/test_google_flow_mocked.py` pour la couverture avec Google simulé).
 
 ## URLs
 

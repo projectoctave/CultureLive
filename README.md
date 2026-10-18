@@ -68,15 +68,18 @@ CultureLive est un **microservice** qui connecte l’agenda **Google Calendar** 
 
 ### 2.1 Découpage code (dépôt)
 
+Le dépôt est séparé en deux blocs : le code applicatif (`application/`) et l’infrastructure (`infrastructure/`).
+
 | Dossier | Rôle |
 |---------|------|
-| `backend/` | API REST, règles métier, classifier, modèle de données, endpoints stats |
-| `integration/` | Couche d’intégration Google (OAuth, client Calendar) |
-| `dashboard/` | Application Streamlit consommant l’API stats (login entreprise / sales) |
-| `tests/` | Tests fonctionnels (classification, DB, auth, flux Google simulé, migrations) et tests Google live |
-| `referential/` | Référentiel typologie sales par défaut (JSON) |
-| `backend/migrations/` | Migrations Alembic (schéma de la base) |
-| `infrastructure/` | Docker Compose, nginx, Let’s Encrypt, seed de démo, Terraform (**AWS EC2**) |
+| `application/` | Tout le code applicatif Python (`pyproject.toml`, `alembic.ini`, `docker-compose.dev.yml` pour la base locale) |
+| `application/backend/` | API REST, règles métier, classifier, modèle de données, endpoints stats, worker |
+| `application/backend/migrations/` | Migrations Alembic (schéma de la base) |
+| `application/integration/` | Couche d’intégration Google (OAuth, client Calendar) |
+| `application/dashboard/` | Application Streamlit consommant l’API stats (login entreprise / sales) |
+| `application/referential/` | Référentiel typologie sales par défaut (JSON) |
+| `application/tests/` | Tests fonctionnels (classification, DB, auth, flux Google simulé, migrations) et tests Google live |
+| `infrastructure/` | Docker Compose, Dockerfiles, nginx, Let’s Encrypt, seed de démo, Terraform (**AWS EC2**) |
 
 ---
 
@@ -111,7 +114,7 @@ Corps création (`POST /meetings`) :
 
 | ID | Exigence | Critère d’acceptation |
 |----|----------|------------------------|
-| REF-01 | Référentiel par défaut | Fichier `referential/sales-typology.json` chargé si aucun actif en base |
+| REF-01 | Référentiel par défaut | Fichier `application/referential/sales-typology.json` chargé si aucun actif en base |
 | REF-02 | Lecture | `GET /referential` (clé admin) retourne le référentiel actif |
 | REF-03 | Mise à jour | `PUT /referential` (clé admin) remplace le référentiel actif ; les réunions déjà classées sont reclassées à la prochaine synchronisation |
 
@@ -162,7 +165,7 @@ Chaque catégorie comporte : `id`, `label`, `description` (utilisée par le clas
 
 Contrainte d’unicité : `(google_event_id, user_id)` sur `meeting_classifications`.
 
-Le schéma est géré par **Alembic** (`backend/migrations/`) ; les migrations sont appliquées au démarrage du conteneur API (`python -m backend.db.migrate`). Un test vérifie que les modèles et les migrations restent alignés et que les migrations sont réversibles.
+Le schéma est géré par **Alembic** (`application/backend/migrations/`) ; les migrations sont appliquées au démarrage du conteneur API (`python -m backend.db.migrate`). Un test vérifie que les modèles et les migrations restent alignés et que les migrations sont réversibles.
 
 ---
 
@@ -221,18 +224,19 @@ Détails opérationnels et état de vérification : `infrastructure/README.md`.
 
 | Suite | Fichier | Objectif |
 |-------|---------|----------|
-| Classification | `tests/test_classification_functional.py` | Agenda sales fictif (`tests/fixtures/sales_agenda.py`) — 8 typologies |
-| Pipeline DB | `tests/test_db_pipeline.py` | Classifier → insert PostgreSQL → cohérence agrégats |
-| Auth dashboard | `tests/test_auth_dashboard.py` | Login, périmètre `org_admin` / `sales_user`, refus 403 / 401 |
-| Flux Google simulé | `tests/test_google_flow_mocked.py` | OAuth, création, lecture paginée, classification, sync incrémentale, isolation des erreurs, worker, clé admin, stats — avec un faux Google Calendar |
-| Migrations | `tests/test_migrations.py` | Schéma créé par Alembic, aligné avec les modèles, réversible |
-| Google live | `tests/test_google_integration.py` | Création de meetings réels, lecture, `classify/sync`, stats (marqueur `google_live`) — **non exécuté à ce jour** : aucun compte Google de test n’a pu être créé |
+| Classification | `application/tests/test_classification_functional.py` | Agenda sales fictif (`application/tests/fixtures/sales_agenda.py`) — 8 typologies |
+| Pipeline DB | `application/tests/test_db_pipeline.py` | Classifier → insert PostgreSQL → cohérence agrégats |
+| Auth dashboard | `application/tests/test_auth_dashboard.py` | Login, périmètre `org_admin` / `sales_user`, refus 403 / 401 |
+| Flux Google simulé | `application/tests/test_google_flow_mocked.py` | OAuth, création, lecture paginée, classification, sync incrémentale, isolation des erreurs, worker, clé admin, stats — avec un faux Google Calendar |
+| Migrations | `application/tests/test_migrations.py` | Schéma créé par Alembic, aligné avec les modèles, réversible |
+| Google live | `application/tests/test_google_integration.py` | Création de meetings réels, lecture, `classify/sync`, stats (marqueur `google_live`) — **non exécuté à ce jour** : aucun compte Google de test n’a pu être créé |
 
 **Prérequis Google live** : OAuth configuré, API démarrée, `DASHBOARD_API_KEY` et `CULTURELIVE_TEST_USER_ID` (UUID interne renvoyé par le callback).
 
 La CI (`.github/workflows/ci.yml`) exécute le lint, les tests avec PostgreSQL, shellcheck, `terraform validate` et le build des images Docker.
 
 ```bash
+cd application
 export PYTHONPATH=$PWD
 export DATABASE_URL=postgresql+asyncpg://cultur_live:cultur_live@localhost:5432/cultur_live
 pytest -m "not google_live" -v          # suite complète hors Google réel
@@ -289,16 +293,17 @@ sequenceDiagram
 
 ```bash
 cd CultureLive
+cp .env.example .env          # renseigner DASHBOARD_API_KEY, JWT_SECRET, TOKEN_ENCRYPTION_KEY, GOOGLE_*
+cd application
 python3 -m venv .venv && source .venv/bin/activate
 pip install -e ".[dev]"
-cp .env.example .env          # renseigner DASHBOARD_API_KEY, JWT_SECRET, TOKEN_ENCRYPTION_KEY, GOOGLE_*
-docker compose up -d postgres # PostgreSQL local (ou une instance existante)
+docker compose -f docker-compose.dev.yml up -d postgres   # PostgreSQL local (ou une instance existante)
 export PYTHONPATH=$PWD
 python -m backend.db.migrate  # applique les migrations
 uvicorn backend.main:app --reload --port 8000
 streamlit run dashboard/app.py    # terminal séparé
 python -m backend.worker          # optionnel : synchronisation périodique
-python infrastructure/scripts/seed_demo_data.py   # optionnel : données de démonstration
+python ../infrastructure/scripts/seed_demo_data.py   # optionnel : données de démonstration
 ```
 
 ### 10.2 Déploiement (Docker, EC2, HTTPS)

@@ -2,8 +2,8 @@ FROM python:3.12-slim
 
 WORKDIR /app
 
-COPY pyproject.toml README.md ./
-COPY dashboard ./dashboard
+COPY application/pyproject.toml ./
+COPY application/dashboard ./dashboard
 
 RUN pip install --no-cache-dir -U pip && pip install --no-cache-dir streamlit pandas plotly requests
 

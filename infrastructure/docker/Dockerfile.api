@@ -4,10 +4,10 @@ WORKDIR /app
 
 RUN apt-get update && apt-get install -y --no-install-recommends curl && rm -rf /var/lib/apt/lists/*
 
-COPY pyproject.toml README.md alembic.ini ./
-COPY backend ./backend
-COPY integration ./integration
-COPY referential ./referential
+COPY application/pyproject.toml application/alembic.ini ./
+COPY application/backend ./backend
+COPY application/integration ./integration
+COPY application/referential ./referential
 
 RUN pip install --no-cache-dir -U pip && pip install --no-cache-dir .
 
