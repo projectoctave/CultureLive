@@ -25,6 +25,13 @@ EXPECTED_TABLES = {
     "dashboard_accounts",
     "sales_referentials",
     "meeting_classifications",
+    "accounts",
+    "activities",
+    "opportunities",
+    "opportunity_stage_events",
+    "sales_targets",
+    "challenges",
+    "coaching_actions",
     "alembic_version",
 }
 

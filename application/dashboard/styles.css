@@ -30,7 +30,7 @@ header[data-testid="stHeader"] {
 
 .block-container {
   padding-top: 1.5rem;
-  max-width: 1200px;
+  max-width: 1400px;
 }
 
 .cl-brand-bar {
@@ -175,4 +175,45 @@ div[data-testid="stVerticalBlockBorderWrapper"] {
   border-radius: var(--cl-radius);
   padding: 0.5rem 0.25rem 1rem;
   box-shadow: 0 8px 32px rgba(25, 16, 83, 0.06);
+}
+
+.cl-badge {
+  display: inline-block;
+  padding: 0.15rem 0.6rem;
+  border-radius: 999px;
+  font-size: 0.72rem;
+  font-weight: 700;
+  letter-spacing: 0.03em;
+  text-transform: uppercase;
+  white-space: nowrap;
+}
+
+.cl-badge-good { background: #e3f4ec; color: #1f7a4f; }
+.cl-badge-warn { background: #fdeedd; color: #b4600f; }
+.cl-badge-bad { background: #fbe6e6; color: #b32d2d; }
+.cl-badge-neutral { background: var(--cl-gylcine); color: var(--cl-grape); }
+
+.cl-alert-title {
+  font-family: "Outfit", sans-serif;
+  font-weight: 600;
+  color: var(--cl-grape-dark);
+  margin-left: 0.35rem;
+}
+
+.cl-bar-row {
+  display: flex;
+  justify-content: space-between;
+  font-size: 0.85rem;
+  font-weight: 600;
+  color: var(--cl-grape-dark);
+  margin-bottom: -0.35rem;
+}
+
+div[data-testid="stTabs"] button[role="tab"] {
+  font-family: "Outfit", sans-serif;
+  font-weight: 600;
+}
+
+div[data-testid="stTabs"] button[aria-selected="true"] {
+  color: var(--cl-peach);
 }

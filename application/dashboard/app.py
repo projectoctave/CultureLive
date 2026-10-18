@@ -1,20 +1,12 @@
-"""Dashboard CultureLive — login org / sales + stats anonymisées."""
+"""Dashboard CultureLive : pilotage de la prospection et du pipe (manager) et ma semaine (commercial)."""
 
 import os
 
-import pandas as pd
-import plotly.express as px
 import requests
 import streamlit as st
 
-from dashboard.branding import (
-    BRAND_COLORS,
-    apply_figure_style,
-    brand_header,
-    inject_theme,
-    kpi_row,
-    section_title,
-)
+from dashboard import manager_view, sales_view
+from dashboard.branding import brand_header, inject_theme
 
 BACKEND_URL = os.getenv("BACKEND_URL", "http://127.0.0.1:8000")
 
@@ -46,7 +38,7 @@ def login_form() -> None:
             with st.form("login"):
                 login = st.text_input("Identifiant")
                 password = st.text_input("Mot de passe", type="password")
-                submitted = st.form_submit_button("Se connecter", use_container_width=True)
+                submitted = st.form_submit_button("Se connecter", width="stretch")
                 if submitted:
                     try:
                         r = requests.post(
@@ -66,131 +58,35 @@ def login_form() -> None:
                         st.error(f"Échec connexion : {exc}")
 
 
-@st.cache_data(ttl=60)
-def fetch_overview(token: str):
-    r = requests.get(
-        f"{BACKEND_URL}/stats/overview",
-        headers={"Authorization": f"Bearer {token}"},
-        timeout=30,
-    )
-    r.raise_for_status()
-    return r.json()
-
-
-@st.cache_data(ttl=60)
-def fetch_meetings(token: str, org: str | None, user: str | None):
-    params: dict[str, str] = {}
-    if org:
-        params["organization_ref"] = org
-    if user:
-        params["user_ref"] = user
-    r = requests.get(
-        f"{BACKEND_URL}/stats/meetings",
-        headers={"Authorization": f"Bearer {token}"},
-        params=params,
-        timeout=30,
-    )
-    r.raise_for_status()
-    return r.json()
-
-
 if "access_token" not in st.session_state:
     login_form()
     st.stop()
 
 token = st.session_state["access_token"]
 role = st.session_state.get("role", "")
-org_ref = st.session_state.get("organization_ref", "")
-user_ref = st.session_state.get("user_ref")
-display_name = st.session_state.get("display_name") or org_ref
+display_name = st.session_state.get("display_name") or st.session_state.get("organization_ref", "")
+is_sales = role == "sales_user"
 
-tagline = (
-    f"Connecté · {display_name} · vue individuelle"
-    if role == "sales_user"
-    else f"Connecté · {display_name} · vue équipe"
+brand_header(
+    title="Ma semaine de chasse" if is_sales else "Pilotage commercial",
+    tagline=f"Connecté · {display_name} · " + ("vue individuelle" if is_sales else "vue manager"),
 )
-brand_header(title="Pilotage des rendez-vous", tagline=tagline)
 
 _, logout_col = st.columns([6, 1])
 with logout_col:
-    if st.button("Déconnexion", use_container_width=True):
+    if st.button("Déconnexion", width="stretch"):
         for key in list(st.session_state.keys()):
             del st.session_state[key]
         st.rerun()
 
 try:
-    overview = fetch_overview(token)
-except Exception as exc:
+    (sales_view if is_sales else manager_view).render(token)
+except requests.HTTPError as exc:
+    if exc.response is not None and exc.response.status_code == 401:
+        st.warning("Session expirée, reconnectez-vous.")
+        for key in list(st.session_state.keys()):
+            del st.session_state[key]
+    else:
+        st.error(f"Erreur du backend : {exc}")
+except requests.RequestException as exc:
     st.error(f"Backend indisponible : {exc}")
-    st.stop()
-
-total_meetings = sum(o.get("meetings", 0) for o in overview.get("by_organization", []))
-total_users = len(overview.get("by_user", []))
-total_categories = len(overview.get("by_category", []))
-kpi_row(
-    [
-        ("Meetings classifiés", total_meetings),
-        ("Commerciaux actifs", total_users),
-        ("Typologies", total_categories),
-    ]
-)
-
-col1, col2 = st.columns(2)
-
-with col1:
-    section_title("Par entreprise")
-    df_org = pd.DataFrame(overview.get("by_organization", []))
-    if df_org.empty:
-        st.info("Aucune donnée pour le moment.")
-    else:
-        fig = px.bar(
-            df_org,
-            x="organization_ref",
-            y="meetings",
-            title="Volume par organisation",
-            color_discrete_sequence=["#201568"],
-        )
-        apply_figure_style(fig)
-        st.plotly_chart(fig, use_container_width=True)
-
-with col2:
-    section_title("Par commercial")
-    df_user = pd.DataFrame(overview.get("by_user", []))
-    if df_user.empty:
-        st.info("Aucune donnée pour le moment.")
-    else:
-        fig = px.bar(
-            df_user,
-            x="user_ref",
-            y="meetings",
-            title="Volume par utilisateur",
-            color_discrete_sequence=["#f1572c"],
-        )
-        apply_figure_style(fig)
-        st.plotly_chart(fig, use_container_width=True)
-
-section_title("Typologie sales")
-df_cat = pd.DataFrame(overview.get("by_category", []))
-if not df_cat.empty:
-    fig = px.pie(
-        df_cat,
-        names="label",
-        values="count",
-        title="Répartition des types de rendez-vous",
-        color_discrete_sequence=px.colors.qualitative.Safe,
-    )
-    apply_figure_style(fig)
-    fig.update_traces(textposition="inside", textinfo="percent+label")
-    st.plotly_chart(fig, use_container_width=True)
-
-section_title("Détail des meetings")
-users = [u["user_ref"] for u in overview.get("by_user", [])]
-if role == "org_admin":
-    sel_user = st.selectbox("Filtrer un commercial", options=["(tous)"] + users)
-    filter_user = None if sel_user == "(tous)" else sel_user
-else:
-    filter_user = user_ref
-    st.info(f"Vue restreinte à votre activité ({user_ref}).")
-
-meetings = fetch_meetings(token, org_ref if role == "org_admin" else org_ref, filter_user)
-st.dataframe(pd.DataFrame(meetings), use_container_width=True, hide_index=True)

@@ -22,11 +22,12 @@ from backend.db.models import (
     SalesReferential,
 )
 from backend.db.session import dispose_engine, get_db
+from backend.deps import resolve_stats_scope
+from backend.routers.coach import router as coach_router
 from backend.services.auth import (
     DashboardRole,
     StatsScope,
     create_access_token,
-    decode_access_token,
     verify_password,
 )
 from backend.services.referential import SalesReferentialPayload, ensure_active_referential
@@ -52,7 +53,8 @@ async def lifespan(_: FastAPI):
     await dispose_engine()
 
 
-app = FastAPI(title="CultureLive API", version="0.2.0", lifespan=lifespan)
+app = FastAPI(title="CultureLive API", version="0.3.0", lifespan=lifespan)
+app.include_router(coach_router)
 
 
 def require_admin_key(
@@ -87,31 +89,6 @@ class ClassifyRangeBody(BaseModel):
     time_max: str
     user_id: uuid.UUID | None = None
     force: bool = Field(default=False, description="Reclassifier même les événements inchangés")
-
-
-async def resolve_stats_scope(
-    settings: Settings = Depends(get_settings),
-    x_api_key: str | None = Header(default=None, alias="X-API-Key"),
-    authorization: str | None = Header(default=None),
-) -> StatsScope:
-    if x_api_key and settings.dashboard_api_key and secrets.compare_digest(x_api_key, settings.dashboard_api_key):
-        return StatsScope(is_superadmin=True)
-
-    if authorization and authorization.lower().startswith("bearer "):
-        token = authorization.split(" ", 1)[1].strip()
-        try:
-            payload = decode_access_token(settings, token)
-        except Exception as exc:
-            raise HTTPException(401, "Token invalide") from exc
-        return StatsScope(
-            role=payload.role,
-            organization_ref=payload.organization_ref,
-            user_ref=payload.user_ref,
-            organization_id=payload.organization_id,
-            user_id=payload.user_id,
-        )
-
-    raise HTTPException(401, "Authentification requise (login ou X-API-Key)")
 
 
 @app.get("/health")

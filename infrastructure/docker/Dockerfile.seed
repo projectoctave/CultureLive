@@ -6,8 +6,6 @@ COPY application/pyproject.toml application/alembic.ini ./
 COPY application/backend ./backend
 COPY application/integration ./integration
 COPY application/referential ./referential
-COPY application/tests/fixtures ./tests/fixtures
-COPY application/tests/__init__.py ./tests/__init__.py
 COPY infrastructure/scripts ./infrastructure/scripts
 
 RUN pip install --no-cache-dir -U pip && pip install --no-cache-dir .

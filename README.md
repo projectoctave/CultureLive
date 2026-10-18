@@ -1,9 +1,9 @@
-# CultureLive — Note de cadrage & spécification (v0.2)
+# CultureLive — Note de cadrage & spécification (v0.3)
 
 **Projet** : CultureLive  
 **Écosystème** : Projet Octave (GitHub)  
 **Statut document** : Spécification de référence — première brique livrée  
-**Version applicative** : 0.2.0  
+**Version applicative** : 0.3.0  
 **Stack** : Python 3.12+, FastAPI, PostgreSQL, Alembic, Google Calendar API, Streamlit, Docker, Terraform  
 **Hébergement cible** : AWS (une instance EC2 exécutant la stack Docker ; PostgreSQL managé possible en production)
 
@@ -144,11 +144,29 @@ Chaque catégorie comporte : `id`, `label`, `description` (utilisée par le clas
 | DSH-03 | Liste filtrée | `GET /stats/meetings?organization_ref=&user_ref=` sans email ni nom réel |
 | DSH-04 | UI | Streamlit : écran de connexion, graphiques barres / camembert, tableau filtrable selon le rôle |
 
+#### Pilotage de la prospection (coaching) — v0.3
+
+Le dashboard n'est plus seulement un compteur de rendez-vous : il donne au manager ce qu'il faut pour **contrôler l'activité, motiver à chasser et sécuriser le pipe**.
+
+| ID | Exigence | Critère d’acceptation |
+|----|----------|------------------------|
+| COA-01 | Indice de chasse hebdomadaire | Moyenne pondérée de la réalisation des objectifs (comptes prospectés 20 %, appels 15 %, emails 10 %, LinkedIn 5 %, RDV obtenus 30 %, opportunités créées 20 %), chaque indicateur plafonné à 120 %. Version « au rythme » tenant compte de l'avancement de la semaine |
+| COA-02 | Objectifs | Objectifs hebdomadaires par défaut d'équipe, surchargeables par commercial (`PUT /coach/targets`) ; quota trimestriel par commercial |
+| COA-03 | Alertes de coaching | Règles transparentes (activité faible, décrochage, volume sans RDV, faible taux de contact, dérive vers la base clients, agenda vide, comptes tier A délaissés, pipe insuffisant, deals dormants, prochaines étapes manquantes) ; chaque alerte propose une action et un type de coaching, transformable en action en un clic |
+| COA-04 | Qualité du pipe | Couverture du pipe (cible 3x le reste à faire du trimestre), deals dormants (aucune activité depuis plus de 14 jours ou bloqués dans une étape), étapes sans prochaine étape datée, deals dont la date de closing est dépassée, taux de passage entre étapes, gagné / perdu et motifs de perte |
+| COA-05 | Entonnoir de conquête | Comptes cibles, contactés, en conversation, RDV obtenus, opportunités, gagnés (12 semaines) |
+| COA-06 | Motivation | Points, classement, séries de semaines au-dessus de 90 %, badges, challenges individuels ou collectifs |
+| COA-07 | Vue commercial | « Ma semaine » : reste à faire par indicateur, comptes tier A à attaquer, deals à relancer, défis, rang, actions de coaching, saisie d'une action de prospection. Un commercial ne voit que ses propres chiffres ; le classement n'expose que pseudonyme et points |
+| COA-08 | Plan de coaching | Le manager crée, suit et clôt des actions (nudge, point 1:1, écoute d'appels, micro-training, reconnaissance) |
+
+Endpoints (préfixe `/coach`, JWT ou clé admin avec `organization_ref`) : `GET /summary`, `/pipeline`, `/accounts`, `/engagement`, `/actions` ; `POST /actions`, `/challenges`, `/activities` ; `PATCH /actions/{id}` ; `PUT /targets`. Les écritures de pilotage (actions, objectifs, challenges) sont réservées au manager ; un commercial peut clôturer ses actions et saisir ses propres activités.
+
 **Règle d’anonymisation** :
 
 - `organization_ref` : dérivé stable du domaine email (`org_<hash10>`).
 - `user_ref` : dérivé stable org + email (`usr_<hash10>`).
 - Le dashboard et l’API stats n’exposent **pas** l’email Google.
+- Un commercial peut avoir un `alias` (pseudonyme) affiché dans le classement et les alertes ; aucun nom réel ni email.
 
 ---
 
@@ -161,7 +179,14 @@ Chaque catégorie comporte : `id`, `label`, `description` (utilisée par le clas
 | `oauth_connections` | Refresh token Google **chiffré** (`TOKEN_ENCRYPTION_KEY`) |
 | `dashboard_accounts` | Comptes de connexion au dashboard (rôle `org_admin` ou `sales_user`, mot de passe haché) |
 | `sales_referentials` | Référentiels JSON versionnés ; un actif à la fois |
-| `meeting_classifications` | Résultat de classification par événement et utilisateur |
+| `meeting_classifications` | Résultat de classification par événement et utilisateur ; lien optionnel vers un compte et une opportunité |
+| `accounts` | Comptes cibles et clients : type (prospect / client), tier A/B/C, segment, origine, premier et dernier contact, propriétaire |
+| `activities` | Actions de prospection (appel, email, LinkedIn) avec résultat (sans réponse, conversation, RDV obtenu, pas intéressé) |
+| `opportunities` | Pipe : étape, montant, origine, nouveau logo, date de closing prévue, prochaine étape et échéance, motif de perte |
+| `opportunity_stage_events` | Historique des changements d'étape (taux de passage, durée par étape) |
+| `sales_targets` | Objectifs par indicateur et période (semaine ou trimestre), par défaut d'équipe ou par commercial |
+| `challenges` | Défis d'équipe ou individuels (indicateur, objectif, période, points) |
+| `coaching_actions` | Plan de coaching : actions du manager vers un commercial, avec échéance et statut |
 
 Contrainte d’unicité : `(google_event_id, user_id)` sur `meeting_classifications`.
 
@@ -184,6 +209,14 @@ Le schéma est géré par **Alembic** (`application/backend/migrations/`) ; les 
 | POST | `/classify/sync` | clé admin | Lecture Calendar + classification + DB (incrémental) |
 | GET | `/stats/overview` | JWT ou clé admin | Agrégats anonymisés, limités au périmètre du rôle |
 | GET | `/stats/meetings` | JWT ou clé admin | Liste des meetings classifiés, limitée au périmètre du rôle |
+| GET | `/coach/summary` | JWT ou clé admin | Indice de chasse, réalisé / objectifs, entonnoir, pipe, alertes de coaching |
+| GET | `/coach/pipeline` | JWT ou clé admin | Pipe par étape et par commercial, couverture, deals à risque, gagné / perdu |
+| GET | `/coach/accounts` | JWT ou clé admin | Comptes tier A sans contact récent |
+| GET | `/coach/engagement` | JWT ou clé admin | Classement, badges, challenges |
+| GET / POST / PATCH | `/coach/actions` | JWT ou clé admin | Plan de coaching (création réservée au manager) |
+| PUT | `/coach/targets` | manager | Objectifs hebdomadaires |
+| POST | `/coach/challenges` | manager | Nouveau challenge |
+| POST | `/coach/activities` | JWT ou clé admin | Saisie d'une action de prospection |
 
 La **clé admin** est l’en-tête `X-API-Key` (valeur `DASHBOARD_API_KEY`).
 
@@ -228,6 +261,7 @@ Détails opérationnels et état de vérification : `infrastructure/README.md`.
 | Pipeline DB | `application/tests/test_db_pipeline.py` | Classifier → insert PostgreSQL → cohérence agrégats |
 | Auth dashboard | `application/tests/test_auth_dashboard.py` | Login, périmètre `org_admin` / `sales_user`, refus 403 / 401 |
 | Flux Google simulé | `application/tests/test_google_flow_mocked.py` | OAuth, création, lecture paginée, classification, sync incrémentale, isolation des erreurs, worker, clé admin, stats — avec un faux Google Calendar |
+| Pilotage commercial | `application/tests/test_coaching.py` | Profils de démonstration, indicateurs, alertes, droits (manager / commercial), isolation entre entreprises, objectifs, saisie d'activité, déterminisme du jeu de données |
 | Migrations | `application/tests/test_migrations.py` | Schéma créé par Alembic, aligné avec les modèles, réversible |
 | Google live | `application/tests/test_google_integration.py` | Création de meetings réels, lecture, `classify/sync`, stats (marqueur `google_live`) — **non exécuté à ce jour** : aucun compte Google de test n’a pu être créé |
 
@@ -303,7 +337,7 @@ python -m backend.db.migrate  # applique les migrations
 uvicorn backend.main:app --reload --port 8000
 streamlit run dashboard/app.py    # terminal séparé
 python -m backend.worker          # optionnel : synchronisation périodique
-python ../infrastructure/scripts/seed_demo_data.py   # optionnel : données de démonstration
+python ../infrastructure/scripts/seed_demo_data.py   # optionnel : 3 entreprises, 11 commerciaux, 12 semaines d'activité et de pipe
 ```
 
 ### 10.2 Déploiement (Docker, EC2, HTTPS)
@@ -323,6 +357,10 @@ Repository public cible : **CultureLive**, associé au programme **Projet Octave
 | **ND** | Note de cadrage — présent document |
 | **Meeting** | Événement Google Calendar |
 | **Référentiel** | Liste des catégories sales et leurs définitions |
+| **Indice de chasse** | Réalisation pondérée des objectifs de prospection de la semaine (100 % = objectifs atteints) |
+| **Couverture du pipe** | Pipe ouvert closable dans le trimestre divisé par le reste à faire sur le quota |
+| **Deal dormant** | Opportunité sans activité depuis plus de 14 jours ou bloquée dans son étape |
+| **Tier A** | Comptes prioritaires du portefeuille de prospection |
 | **Ref anonymisée** | `organization_ref` / `user_ref` — identifiants opaques pour stats |
 
 ---

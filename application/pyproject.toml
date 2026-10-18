@@ -18,7 +18,7 @@ dependencies = [
   "httpx>=0.28.0",
   "openai>=1.57.0",
   "python-multipart>=0.0.17",
-  "streamlit>=1.40.0",
+  "streamlit>=1.50.0",
   "pandas>=2.2.0",
   "plotly>=5.24.0",
   "PyJWT>=2.10.0",
@@ -64,4 +64,6 @@ select = ["E", "F", "I", "B"]
 extend-immutable-calls = ["fastapi.Depends", "fastapi.Query", "fastapi.Header"]
 
 [tool.ruff.lint.per-file-ignores]
+"backend/services/coaching.py" = ["E501"]
+"backend/demo_data.py" = ["E501"]
 "infrastructure/scripts/*.py" = ["E402"]
