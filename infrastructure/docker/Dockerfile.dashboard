@@ -3,11 +3,13 @@ FROM python:3.12-slim
 WORKDIR /app
 
 COPY application/pyproject.toml ./
+COPY application/.streamlit ./.streamlit
 COPY application/dashboard ./dashboard
 
 RUN pip install --no-cache-dir -U pip && pip install --no-cache-dir streamlit pandas plotly requests
 
 ENV BACKEND_URL=http://api:8000
+ENV PYTHONPATH=/app
 EXPOSE 8501
 
 CMD ["streamlit", "run", "dashboard/app.py", "--server.port=8501", "--server.address=0.0.0.0", "--server.headless=true"]

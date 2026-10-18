@@ -1,0 +1,193 @@
+@import url("https://fonts.googleapis.com/css2?family=Manrope:wght@400;500;600;700&family=Outfit:wght@400;500;600;700&display=swap");
+
+:root {
+  --cl-grape-dark: #191053;
+  --cl-grape: #201568;
+  --cl-grape-light: #3322a7;
+  --cl-peach: #f1572c;
+  --cl-peach-dark: #c04523;
+  --cl-paper: #fafafb;
+  --cl-gylcine: #ebe9fd;
+  --cl-gylcine-soft: #f5f4fe;
+  --cl-border: rgba(25, 16, 83, 0.12);
+  --cl-radius: 12px;
+}
+
+html,
+body,
+[class*="css"] {
+  font-family: "Manrope", "Outfit", system-ui, sans-serif;
+}
+
+/* Masquer le menu/header Streamlit par défaut */
+#MainMenu,
+footer,
+header[data-testid="stHeader"] {
+  visibility: hidden;
+  height: 0;
+  min-height: 0;
+}
+
+.block-container {
+  padding-top: 1.5rem;
+  max-width: 1200px;
+}
+
+.cl-brand-bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+  padding: 1rem 1.25rem;
+  margin-bottom: 1.75rem;
+  background: linear-gradient(135deg, var(--cl-grape-dark) 0%, var(--cl-grape) 55%, var(--cl-grape-light) 100%);
+  border-radius: var(--cl-radius);
+  box-shadow: 0 12px 40px rgba(25, 16, 83, 0.18);
+}
+
+.cl-brand-left {
+  display: flex;
+  align-items: center;
+  gap: 1rem;
+}
+
+.cl-brand-bar img {
+  height: 36px;
+  width: auto;
+  filter: brightness(0) invert(1);
+}
+
+.cl-brand-title {
+  color: #fff;
+  font-family: "Outfit", sans-serif;
+  font-size: 1.35rem;
+  font-weight: 600;
+  letter-spacing: -0.02em;
+  margin: 0;
+  line-height: 1.2;
+}
+
+.cl-brand-tagline {
+  color: rgba(255, 255, 255, 0.82);
+  font-size: 0.85rem;
+  margin: 0.15rem 0 0;
+  max-width: 36rem;
+}
+
+.cl-login-wrap {
+  max-width: 420px;
+  margin: 2rem auto 0;
+  padding: 2rem 1.75rem 1.5rem;
+  background: #fff;
+  border: 1px solid var(--cl-border);
+  border-radius: var(--cl-radius);
+  box-shadow: 0 8px 32px rgba(25, 16, 83, 0.06);
+}
+
+.cl-login-wrap h1 {
+  font-family: "Outfit", sans-serif !important;
+  color: var(--cl-grape-dark) !important;
+  font-size: 1.65rem !important;
+  font-weight: 700 !important;
+  letter-spacing: -0.03em;
+}
+
+.cl-section-title {
+  font-family: "Outfit", sans-serif;
+  color: var(--cl-grape-dark);
+  font-size: 1.1rem;
+  font-weight: 600;
+  margin: 0 0 0.75rem;
+  padding-bottom: 0.35rem;
+  border-bottom: 2px solid var(--cl-peach);
+  display: inline-block;
+}
+
+.cl-kpi-row {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
+  gap: 0.75rem;
+  margin-bottom: 1.25rem;
+}
+
+.cl-kpi {
+  background: #fff;
+  border: 1px solid var(--cl-border);
+  border-radius: var(--cl-radius);
+  padding: 0.85rem 1rem;
+}
+
+.cl-kpi-label {
+  font-size: 0.72rem;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--cl-grape-light);
+  font-weight: 600;
+}
+
+.cl-kpi-value {
+  font-family: "Outfit", sans-serif;
+  font-size: 1.75rem;
+  font-weight: 700;
+  color: var(--cl-peach);
+  line-height: 1.1;
+}
+
+div[data-testid="stForm"] {
+  border: none;
+  padding: 0;
+}
+
+div[data-testid="stFormSubmitButton"] button,
+div[data-testid="stButton"] button {
+  font-family: "Outfit", sans-serif;
+  font-weight: 600;
+  border-radius: 999px;
+  border: none;
+  transition: transform 0.15s ease, box-shadow 0.15s ease;
+}
+
+div[data-testid="stFormSubmitButton"] button[kind="primary"],
+div[data-testid="stFormSubmitButton"] button {
+  background: var(--cl-peach) !important;
+  color: #fff !important;
+}
+
+div[data-testid="stFormSubmitButton"] button:hover,
+div[data-testid="stButton"] button:hover {
+  transform: translateY(-1px);
+  box-shadow: 0 6px 20px rgba(241, 87, 44, 0.35);
+}
+
+div[data-testid="stMetric"] {
+  background: var(--cl-gylcine-soft);
+  border-radius: var(--cl-radius);
+  padding: 0.75rem 1rem;
+  border: 1px solid var(--cl-border);
+}
+
+h1,
+h2,
+h3 {
+  font-family: "Outfit", sans-serif !important;
+  color: var(--cl-grape-dark) !important;
+  letter-spacing: -0.02em;
+}
+
+[data-testid="stDataFrame"] {
+  border: 1px solid var(--cl-border);
+  border-radius: var(--cl-radius);
+  overflow: hidden;
+}
+
+.stAlert {
+  border-radius: var(--cl-radius);
+}
+
+div[data-testid="stVerticalBlockBorderWrapper"] {
+  background: #fff;
+  border-color: var(--cl-border) !important;
+  border-radius: var(--cl-radius);
+  padding: 0.5rem 0.25rem 1rem;
+  box-shadow: 0 8px 32px rgba(25, 16, 83, 0.06);
+}
